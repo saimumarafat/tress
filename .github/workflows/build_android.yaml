@@ -107,7 +107,7 @@ jobs:
           mvn -B deploy:deploy-file \
             -DrepositoryId=github \
             -Durl="https://maven.pkg.github.com/${{ github.repository }}" \
-            -DgroupId=com.google.aiedge.gallery \
+            -DgroupId=com.tress.app \
             -DartifactId=tress-android \
             -Dversion="${{ steps.prep.outputs.pkg_version }}" \
             -Dpackaging=apk \

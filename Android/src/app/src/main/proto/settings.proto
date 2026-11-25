@@ -15,11 +15,11 @@ limitations under the License.
 
 syntax = "proto3";
 
-package com.google.ai.edge.gallery.proto;
+package com.tress.app.proto;
 
 import "chat_history.proto";
 
-option java_package = "com.google.ai.edge.gallery.proto";
+option java_package = "com.tress.app.proto";
 option java_multiple_files = true;
 
 enum Theme {

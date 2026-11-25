@@ -14,10 +14,10 @@
 -keep class com.google.mlkit.** { *; }
 
 # Gson / Moshi / Kotlinx Serialization models
--keep class com.google.ai.edge.gallery.data.** { *; }
--keep class com.google.ai.edge.gallery.proto.** { *; }
--keep class com.google.ai.edge.gallery.tools.** { *; }
--keep class com.google.ai.edge.gallery.intents.** { *; }
+-keep class com.tress.app.data.** { *; }
+-keep class com.tress.app.proto.** { *; }
+-keep class com.tress.app.tools.** { *; }
+-keep class com.tress.app.intents.** { *; }
 -keepclassmembers class * {
     @com.google.gson.annotations.SerializedName <fields>;
 }

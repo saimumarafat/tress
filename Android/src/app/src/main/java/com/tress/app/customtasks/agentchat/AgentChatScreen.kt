@@ -1,0 +1,912 @@
+/*
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.tress.app.customtasks.agentchat
+
+import android.content.Context
+import android.os.Bundle
+import android.util.Log
+import android.webkit.ConsoleMessage
+import android.webkit.JavascriptInterface
+import android.webkit.WebResourceRequest
+import android.webkit.WebView
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.vectorResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.fromHtml
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.net.toUri
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import com.tress.app.GalleryEvent
+import com.tress.app.R
+import com.tress.app.agent.PromptExpander
+import com.tress.app.common.LOCAL_URL_BASE
+import com.tress.app.data.AgentSkillsURLs
+import com.tress.app.data.BuiltInTaskId
+import com.tress.app.data.Model
+import com.tress.app.data.Task
+import com.tress.app.firebaseAnalytics
+import com.tress.app.skills.formatSelectedSkills
+import com.tress.app.tools.AskInfoToolAction
+import com.tress.app.tools.AskMcpToolCallPermissionAction
+import com.tress.app.tools.AskSensitiveDataPermissionAction
+import com.tress.app.tools.CallJsToolAction
+import com.tress.app.tools.PermissionResult
+import com.tress.app.tools.RequestPermissionToolAction
+import com.tress.app.tools.SensitiveDataDecision
+import com.tress.app.tools.SkillProgressToolAction
+import com.tress.app.ui.common.BaseGalleryWebViewClient
+import com.tress.app.ui.common.GalleryWebView
+import com.tress.app.ui.common.WebViewUrlPolicy
+import com.tress.app.ui.common.chat.ChatMessage
+import com.tress.app.ui.common.chat.ChatMessageCollapsableProgressPanel
+import com.tress.app.ui.common.chat.ChatMessageImage
+import com.tress.app.ui.common.chat.ChatMessageText
+import com.tress.app.ui.common.chat.ChatMessageType
+import com.tress.app.ui.common.chat.ChatMessageWebView
+import com.tress.app.ui.common.chat.ChatSide
+import com.tress.app.ui.common.chat.LogMessage
+import com.tress.app.ui.common.chat.LogMessageLevel
+import com.tress.app.ui.common.chat.SendMessageTrigger
+import com.tress.app.ui.common.chat.convertToLitertMessage
+import com.tress.app.ui.llmchat.LlmChatScreen
+import com.tress.app.ui.llmchat.LlmChatViewModel
+import com.tress.app.ui.modelmanager.ModelManagerViewModel
+import java.lang.Exception
+import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.resume
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
+
+private const val TAG = "AGAgentChatScreen"
+private const val JS_BRIDGE_NAME = "AiEdgeGallery"
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun AgentChatScreen(
+  task: Task,
+  modelManagerViewModel: ModelManagerViewModel,
+  navigateUp: () -> Unit,
+  agentTools: AgentTools,
+  viewModel: AgentChatViewModel = hiltViewModel(),
+  skillManagerViewModel: SkillManagerViewModel = hiltViewModel(),
+  mcpManagerViewModel: McpManagerViewModel = hiltViewModel(),
+  initialQuery: String? = null,
+  initialSessionId: String? = null,
+) {
+  val context = LocalContext.current
+  val scope = rememberCoroutineScope()
+  agentTools.context = context
+  agentTools.skillsProvider = skillManagerViewModel.skillManager
+  agentTools.dataStoreRepository = skillManagerViewModel.skillManager.dataStoreRepository
+  agentTools.mcpManagerViewModel = mcpManagerViewModel
+  agentTools.taskId = task.id
+  val density = LocalDensity.current
+  val windowInfo = LocalWindowInfo.current
+  val screenWidthDp = remember { with(density) { windowInfo.containerSize.width.toDp() } }
+  var showSkillManagerBottomSheet by remember { mutableStateOf(false) }
+  var showMcpManagerBottomSheet by remember { mutableStateOf(false) }
+  var showAskInfoDialog by remember { mutableStateOf(false) }
+  var currentAskInfoAction by remember { mutableStateOf<AskInfoToolAction?>(null) }
+  var currentMcpPermissionAction by remember {
+    mutableStateOf<AskMcpToolCallPermissionAction?>(null)
+  }
+  var currentSensitiveDataPermissionAction by remember {
+    mutableStateOf<AskSensitiveDataPermissionAction?>(null)
+  }
+  var askInfoInputValue by remember { mutableStateOf("") }
+  var webViewRef: WebView? by remember { mutableStateOf(null) }
+  val chatWebViewClient = remember { ChatWebViewClient(context = context) }
+  val chatViewJavascriptInterface: ChatWebViewJavascriptInterface = remember {
+    ChatWebViewJavascriptInterface()
+  }
+  var curSystemPrompt by remember { mutableStateOf(task.defaultSystemPrompt) }
+  val systemPromptUpdatedMessage = stringResource(R.string.system_prompt_updated)
+  var sendMessageTrigger by remember { mutableStateOf<SendMessageTrigger?>(null) }
+  var showAlertForDisabledSkill by remember { mutableStateOf(false) }
+  var disabledSkillName by remember { mutableStateOf("") }
+
+  var currentPermissionAction by remember { mutableStateOf<RequestPermissionToolAction?>(null) }
+  val permissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+      permissionGranted ->
+      currentPermissionAction?.result?.complete(permissionGranted)
+      currentPermissionAction = null
+    }
+
+  LaunchedEffect(task) { viewModel.loadSystemPrompt(task) }
+  val uiSystemPrompt by viewModel.uiSystemPrompt.collectAsState()
+
+  // Collect UI states from view models. Ensure launched effect is triggered when the UI state is
+  // updated.
+  val llmChatUiState by viewModel.uiState.collectAsState()
+  val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
+  val skillUiState by skillManagerViewModel.uiState.collectAsState()
+  val mcpUiState by mcpManagerViewModel.uiState.collectAsState()
+
+  val skillCount = skillUiState.skills.count { it.skill.selected }
+  val mcpCount = mcpUiState.mcpServers.count { it.mcpServer.enabled }
+  val mcpToolsCount =
+    mcpUiState.mcpServers
+      .filter { it.mcpServer.enabled }
+      .sumOf { it.mcpServer.toolsList.count { tool -> tool.enabled } }
+
+  LaunchedEffect(uiSystemPrompt, mcpToolsCount) {
+    curSystemPrompt = getEffectiveBaseSystemPrompt(uiSystemPrompt, mcpToolsCount > 0)
+  }
+
+  val selectedModel = modelManagerUiState.selectedModel
+  val modelInitStatus by selectedModel.initStatusFlow.collectAsState()
+
+  DisposableEffect(selectedModel.name, task.id) {
+    if (selectedModel.setupAgentSkillTopK()) {
+      modelManagerViewModel.updateConfigValuesUpdateTrigger()
+    }
+
+    onDispose {
+      if (selectedModel.cleanupAgentSkillTopK()) {
+        modelManagerViewModel.updateConfigValuesUpdateTrigger()
+      }
+    }
+  }
+
+  // The prompt supplied through a deep link (e.g. `...://llm_agent_chat/?query=...`), if any.
+  //
+  // Deep links are an untrusted, externally controlled input: any app, web page, QR code or
+  // notification can open one. Because the agent can invoke tools and Android intents on the user's
+  // behalf, this prompt is NEVER sent automatically. It is held here until the user reviews it in
+  // [ExternalPromptConfirmationDialog] and explicitly confirms. Dismissing the dialog discards the
+  // prompt; it is re-armed only when a new `initialQuery` arrives.
+  var pendingExternalPrompt by
+    remember(initialQuery) { mutableStateOf(initialQuery?.takeIf { it.isNotEmpty() }) }
+
+  LlmChatScreen(
+    modelManagerViewModel = modelManagerViewModel,
+    taskId = BuiltInTaskId.LLM_AGENT_CHAT,
+    navigateUp = navigateUp,
+    viewModel = viewModel,
+    initialSessionId = initialSessionId,
+    skillCount = skillCount,
+    mcpCount = mcpCount,
+    mcpToolsCount = mcpToolsCount,
+    onFirstToken = { model ->
+      scope.launch(Dispatchers.Main) {
+        updateProgressPanel(viewModel = viewModel, model = model, agentTools = agentTools)
+      }
+    },
+    onGenerateResponseDone = { model ->
+      scope.launch(Dispatchers.Main) {
+        // Show any image produced by tools.
+        agentTools.resultImageToShow?.let { resultImage ->
+          resultImage.base64?.let { base64 ->
+            decodeBase64ToBitmap(base64String = base64)?.let { bitmap ->
+              viewModel.addMessage(
+                model = model,
+                message =
+                  ChatMessageImage(
+                    bitmaps = listOf(bitmap),
+                    imageBitMaps = listOf(bitmap.asImageBitmap()),
+                    side = ChatSide.AGENT,
+                    maxSize = (screenWidthDp.value * 0.8).toInt(),
+                    latencyMs = -1.0f,
+                    hideSenderLabel = true,
+                  ),
+              )
+            }
+          }
+          // Clean up.
+          agentTools.resultImageToShow = null
+        }
+
+        // Show any webview produced by tools.
+        agentTools.resultWebviewToShow?.let { webview ->
+          val url = webview.url ?: ""
+          val iframe = webview.iframe == true
+          val aspectRatio = webview.aspectRatio ?: 1.333f
+          viewModel.addMessage(
+            model = model,
+            message =
+              ChatMessageWebView(
+                url = url,
+                iframe = iframe,
+                aspectRatio = aspectRatio,
+                hideSenderLabel = true,
+              ),
+          )
+          // Clean up.
+          agentTools.resultWebviewToShow = null
+        }
+        updateProgressPanel(viewModel = viewModel, model = model, agentTools = agentTools)
+      }
+    },
+    onResetSessionClickedOverride = { task, _, initialMessages, clearHistory ->
+      resetSessionWithCurrentSkillsAndMcps(
+        viewModel,
+        modelManagerViewModel,
+        skillManagerViewModel,
+        task,
+        curSystemPrompt,
+        agentTools,
+        initialMessages = initialMessages,
+        clearHistory = clearHistory,
+      )
+    },
+    onSkillClicked = { showSkillManagerBottomSheet = true },
+    onMcpClicked = { showMcpManagerBottomSheet = true },
+    showImagePicker = true,
+    showAudioPicker = true,
+    showTextFilePicker = true,
+    getActiveSkills = {
+      skillManagerViewModel.getSelectedSkills().map { skill ->
+        skillManagerViewModel.getSkillShortId(skill)
+      }
+    },
+    composableBelowMessageList = { model ->
+      val actionChannel = agentTools.receiveActionChannel
+      val doneIcon = ImageVector.vectorResource(R.drawable.skill)
+      // Use rememberUpdatedState to ensure that LaunchedEffect captures the
+      // latest active model when the model is switched during an ongoing skill execution.
+      val currentModel by androidx.compose.runtime.rememberUpdatedState(model)
+      LaunchedEffect(actionChannel) {
+        for (action in actionChannel) {
+          Log.d(TAG, "Handling action: $action")
+          when (action) {
+            is SkillProgressToolAction -> {
+              viewModel.updateCollapsableProgressPanelMessage(
+                model = currentModel,
+                title = action.label,
+                inProgress = action.inProgress,
+                doneIcon = doneIcon,
+                addItemTitle = action.addItemTitle,
+                addItemDescription = action.addItemDescription,
+                customData = action.customData,
+              )
+            }
+            is CallJsToolAction -> {
+              val skillName =
+                if ("/skills/" in action.url) {
+                  action.url.substringAfter("/skills/").substringBefore("/")
+                } else if (action.url.startsWith(LOCAL_URL_BASE + "/")) {
+                  action.url.substringAfter(LOCAL_URL_BASE + "/").substringBefore("/")
+                } else {
+                  action.url
+                }
+              val skill = skillManagerViewModel.getSkill(name = skillName)
+              val skillId = skill?.let { skillManagerViewModel.getSkillShortId(it) } ?: "xxxx"
+              val skillOrigin = WebViewUrlPolicy.extractHttpsOrigin(action.url)
+              if (skillOrigin == null) {
+                Log.w(
+                  TAG,
+                  "Blocked skill execution with invalid or non-HTTPS URL, scheme: ${action.url.toUri().scheme}",
+                )
+                action.result.complete("{\"error\": \"Skill URL must be a valid HTTPS URL.\"}")
+                continue
+              }
+              val activeWebView = webViewRef
+              if (activeWebView == null) {
+                action.result.complete("{\"error\": \"Skill WebView is not initialized.\"}")
+                continue
+              }
+              try {
+                // Lock navigation to the skill's HTTPS origin and attach bridge for this
+                // invocation.
+                chatWebViewClient.allowedOrigin = skillOrigin
+                attachJsBridge(activeWebView, chatViewJavascriptInterface)
+
+                val completedInTime =
+                  withTimeoutOrNull(60_000L) {
+                    // Load url.
+                    suspendCancellableCoroutine<Unit> { continuation ->
+                      continuation.invokeOnCancellation {
+                        chatWebViewClient.setPageLoadListener(null)
+                      }
+                      chatWebViewClient.setPageLoadListener {
+                        chatWebViewClient.setPageLoadListener(null)
+                        if (continuation.isActive) {
+                          continuation.resume(Unit)
+                        }
+                      }
+                      Log.d(TAG, "Loading url: ${action.url}")
+                      activeWebView.loadUrl(action.url)
+                    }
+
+                    val loadedOrigin = WebViewUrlPolicy.extractHttpsOrigin(activeWebView.url)
+                    if (loadedOrigin != skillOrigin) {
+                      Log.w(
+                        TAG,
+                        "Aborting JS execution: loaded origin $loadedOrigin does not match $skillOrigin",
+                      )
+                      action.result.complete(
+                        "{\"error\": \"Skill WebView navigated away from expected origin.\"}"
+                      )
+                    } else {
+                      // Execute JS with a one-shot invocation token gated on the active skill
+                      // origin.
+                      Log.d(TAG, "Start to run js")
+                      val invocationToken = UUID.randomUUID().toString()
+                      chatViewJavascriptInterface.bindInvocation(invocationToken) { result ->
+                        Log.d(TAG, "Got result:\n$result")
+                        if (!action.result.complete(result)) {
+                          return@bindInvocation
+                        }
+                        val isSuccess = "\"error\":" !in result
+                        val errorType = if (isSuccess) "" else "js_error"
+                        Log.d(
+                          TAG,
+                          "Analytics: skill_execution, capability_name=${task.id}, skill_name=$skillName, success=$isSuccess, error_type=$errorType",
+                        )
+                        firebaseAnalytics?.logEvent(
+                          GalleryEvent.SKILL_EXECUTION.id,
+                          Bundle().apply {
+                            putString("capability_name", task.id)
+                            putString("skill_name", skillName)
+                            putString("skill_id", skillId)
+                            putBoolean("success", isSuccess)
+                            putString("error_type", errorType)
+                          },
+                        )
+                      }
+
+                      val safeToken = JSONObject.quote(invocationToken)
+                      val safeData = JSONObject.quote(action.data)
+                      val safeSecret = JSONObject.quote(action.secret)
+                      val script =
+                        """
+                        (async function() {
+                            var startTs = Date.now();
+                            while(true) {
+                              if (typeof ai_edge_gallery_get_result === 'function') {
+                                break;
+                              }
+                              await new Promise(resolve=>{
+                                setTimeout(resolve, 100)
+                              });
+                              if (Date.now() - startTs > 10000) {
+                                break;
+                              }
+                            }
+                            try {
+                              var result = await ai_edge_gallery_get_result($safeData, $safeSecret);
+                              AiEdgeGallery.onResultReady($safeToken, String(result ?? ""));
+                            } catch (e) {
+                              AiEdgeGallery.onResultReady(
+                                $safeToken,
+                                JSON.stringify({error: String(e && e.message ? e.message : e)})
+                              );
+                            }
+                        })()
+                        """
+                          .trimIndent()
+                      activeWebView.evaluateJavascript(script, null)
+                      action.result.join()
+                    }
+                    true
+                  }
+
+                if (completedInTime == null && !action.result.isCompleted) {
+                  Log.e(TAG, "JS Execution timed out, completing with error.")
+                  Log.d(
+                    TAG,
+                    "Analytics: skill_execution, capability_name=${task.id}, skill_name=$skillName, success=false, error_type=timeout",
+                  )
+                  firebaseAnalytics?.logEvent(
+                    GalleryEvent.SKILL_EXECUTION.id,
+                    Bundle().apply {
+                      putString("capability_name", task.id)
+                      putString("skill_name", skillName)
+                      putString("skill_id", skillId)
+                      putBoolean("success", false)
+                      putString("error_type", "timeout")
+                    },
+                  )
+                  action.result.complete(
+                    "{\"error\": \"Skill execution timed out. Please check network connection.\"}"
+                  )
+                }
+              } catch (e: CancellationException) {
+                action.result.cancel(e)
+                throw e
+              } catch (e: Exception) {
+                Log.d(
+                  TAG,
+                  "Analytics: skill_execution, capability_name=${task.id}, skill_name=$skillName, success=false, error_type=exception",
+                )
+                firebaseAnalytics?.logEvent(
+                  GalleryEvent.SKILL_EXECUTION.id,
+                  Bundle().apply {
+                    putString("capability_name", task.id)
+                    putString("skill_name", skillName)
+                    putString("skill_id", skillId)
+                    putBoolean("success", false)
+                    putString("error_type", "exception")
+                  },
+                )
+                action.result.completeExceptionally(e)
+              } finally {
+                chatWebViewClient.setPageLoadListener(null)
+                chatViewJavascriptInterface.clearInvocation()
+                chatWebViewClient.allowedOrigin = null
+                activeWebView.removeJavascriptInterface(JS_BRIDGE_NAME)
+                activeWebView.loadUrl("about:blank")
+              }
+            }
+            is AskInfoToolAction -> {
+              currentAskInfoAction = action
+              askInfoInputValue = "" // Reset input
+              showAskInfoDialog = true
+            }
+            is RequestPermissionToolAction -> {
+              currentPermissionAction = action
+              permissionLauncher.launch(action.permission)
+            }
+            is AskMcpToolCallPermissionAction -> {
+              currentMcpPermissionAction = action
+            }
+            is AskSensitiveDataPermissionAction -> {
+              // Deny a pending prompt that is being replaced, e.g. when two prompts arrive before
+              // recomposition, so its tool does not wait forever.
+              currentSensitiveDataPermissionAction?.result?.complete(SensitiveDataDecision.DENY)
+              currentSensitiveDataPermissionAction = action
+            }
+          }
+        }
+      }
+
+      GalleryWebView(
+        modifier = Modifier.size(300.dp),
+        onWebViewCreated = { webView -> webViewRef = webView },
+        customWebViewClient = chatWebViewClient,
+        onConsoleMessage = { consoleMessage ->
+          consoleMessage?.let { curConsoleMessage ->
+            // Create a LogMessage from the ConsoleMessage and add it to the progress panel.
+            val logMessage =
+              LogMessage(
+                level =
+                  when (curConsoleMessage.messageLevel()) {
+                    ConsoleMessage.MessageLevel.LOG -> LogMessageLevel.Info
+                    ConsoleMessage.MessageLevel.ERROR -> LogMessageLevel.Error
+                    ConsoleMessage.MessageLevel.WARNING -> LogMessageLevel.Warning
+                    else -> LogMessageLevel.Info
+                  },
+                source = curConsoleMessage.sourceId(),
+                lineNumber = curConsoleMessage.lineNumber(),
+                message = curConsoleMessage.message(),
+              )
+            viewModel.addLogMessageToLastCollapsableProgressPanel(
+              model = model,
+              logMessage = logMessage,
+            )
+            Log.d(
+              TAG,
+              "${curConsoleMessage.message()} " +
+                "-- From line ${curConsoleMessage.lineNumber()} of ${curConsoleMessage.sourceId()}",
+            )
+          }
+        },
+      )
+    },
+    allowEditingSystemPrompt = true,
+    curSystemPrompt = curSystemPrompt,
+    onSystemPromptChanged = { newPrompt ->
+      curSystemPrompt = newPrompt
+      viewModel.applySystemPromptChange(
+        task = task,
+        model = modelManagerViewModel.uiState.value.selectedModel,
+        newPrompt = newPrompt,
+        systemPromptUpdatedMessage = systemPromptUpdatedMessage,
+      )
+    },
+    emptyStateComposable = { model ->
+      val uiState by viewModel.uiState.collectAsState()
+      val initStatus by model.initStatusFlow.collectAsState()
+      val ready =
+        initStatus is Model.InitializationStatus.Initialized && !uiState.isResettingSession
+      val chips =
+        getTryOutChips(LocalContext.current).filterNot {
+          it.skillName == "learn-something-new" && selectedModel.name != "Gemma-4-E4B-it"
+        }
+      val skillTags =
+        buildList {
+          add("$skillCount skills")
+          if (mcpToolsCount > 0) add("$mcpToolsCount tools")
+        }
+      AnimatedVisibility(
+        !WindowInsets.isImeVisible,
+        enter = fadeIn(animationSpec = tween(200)),
+        exit = fadeOut(animationSpec = tween(200)),
+      ) {
+        com.tress.app.ui.common.chat.BentoChatEmptyState(
+          model = model,
+          statusLabel = if (ready) "Ready" else "Preparing",
+          startersTitle = "Agent Skills",
+          starters =
+            chips.map { promptChip ->
+              com.tress.app.ui.common.chat.BentoStarterItem(
+                label = promptChip.label,
+                prompt = promptChip.prompt,
+                icon = promptChip.icon,
+                onClick = {
+                  if (skillManagerViewModel.isSkillSelected(promptChip.skillName)) {
+                    sendMessageTrigger =
+                      SendMessageTrigger(
+                        model = model,
+                        messages =
+                          listOf(ChatMessageText(content = promptChip.prompt, side = ChatSide.USER)),
+                      )
+                  } else {
+                    disabledSkillName = promptChip.skillName
+                    showAlertForDisabledSkill = true
+                  }
+                },
+              )
+            },
+          startersEnabled = ready,
+          startersTone = com.tress.app.core.design.theme.Tone.Orchid,
+          capabilityTags = skillTags,
+        )
+      }
+    },
+    sendMessageTrigger = sendMessageTrigger,
+  )
+
+  if (showAskInfoDialog && currentAskInfoAction != null) {
+    val action = currentAskInfoAction!!
+    SecretEditorDialog(
+      title = action.dialogTitle,
+      fieldLabel = action.fieldLabel,
+      value = askInfoInputValue,
+      onValueChange = { askInfoInputValue = it },
+      onDone = {
+        action.result.complete(askInfoInputValue)
+        showAskInfoDialog = false
+        currentAskInfoAction = null
+      },
+      onDismiss = {
+        action.result.complete("")
+        showAskInfoDialog = false
+        currentAskInfoAction = null
+      },
+    )
+  }
+
+  if (currentMcpPermissionAction != null) {
+    val action = currentMcpPermissionAction!!
+    McpToolCallPermissionDialog(
+      toolName = action.toolName,
+      argument = action.argument,
+      onResult = { result ->
+        action.result.complete(result)
+        if (result == PermissionResult.ALWAYS_ALLOW) {
+          val serverState =
+            mcpManagerViewModel.uiState.value.mcpServers.find { serverState ->
+              serverState.mcpServer.toolsList.any { it.name == action.toolName }
+            }
+          serverState?.mcpServer?.url?.let { url ->
+            mcpManagerViewModel.setMcpToolAlwaysAllow(
+              url = url,
+              toolName = action.toolName,
+              alwaysAllow = true,
+            )
+          }
+        }
+        currentMcpPermissionAction = null
+      },
+    )
+  }
+
+  currentSensitiveDataPermissionAction?.let { action ->
+    // If the screen goes away before the user answers, deny so that the waiting tool does not
+    // block forever. Completing an already completed action is a no-op.
+    DisposableEffect(action) { onDispose { action.result.complete(SensitiveDataDecision.DENY) } }
+    SensitiveDataPermissionDialog(
+      request = action.request,
+      onResult = { decision ->
+        action.result.complete(decision)
+        currentSensitiveDataPermissionAction = null
+      },
+    )
+  }
+
+  if (showSkillManagerBottomSheet) {
+    SkillManagerBottomSheet(
+      agentTools = agentTools,
+      skillManagerViewModel = skillManagerViewModel,
+      onDismiss = { selectedSkillsChanged ->
+        // Hide sheet.
+        showSkillManagerBottomSheet = false
+
+        // Reset session when selected skills changed.
+        if (selectedSkillsChanged) {
+          Log.d(TAG, "Selected skill changed. Resetting conversation.")
+          resetSessionWithCurrentSkillsAndMcps(
+            viewModel,
+            modelManagerViewModel,
+            skillManagerViewModel,
+            task,
+            curSystemPrompt,
+            agentTools,
+          )
+        }
+      },
+    )
+  }
+
+  if (showMcpManagerBottomSheet) {
+    McpManagerBottomSheet(
+      mcpManagerViewModel = mcpManagerViewModel,
+      onDismiss = { selectMcpsAndToolsChanged ->
+        showMcpManagerBottomSheet = false
+        if (selectMcpsAndToolsChanged) {
+          Log.d(TAG, "Selected MCPs or tools changed. Resetting conversation.")
+          resetSessionWithCurrentSkillsAndMcps(
+            viewModel,
+            modelManagerViewModel,
+            skillManagerViewModel,
+            task,
+            curSystemPrompt,
+            agentTools,
+          )
+        }
+      },
+    )
+  }
+
+  if (showAlertForDisabledSkill) {
+    AlertDialog(
+      onDismissRequest = { showAlertForDisabledSkill = false },
+      title = { Text(stringResource(R.string.disabled_skill_dialog_title, disabledSkillName)) },
+      text = { Text(stringResource(R.string.enable_skill_dialog_content)) },
+      confirmButton = {
+        Button(onClick = { showAlertForDisabledSkill = false }) {
+          Text(stringResource(R.string.ok))
+        }
+      },
+    )
+  }
+
+  pendingExternalPrompt?.let { prompt ->
+    ExternalPromptConfirmationDialog(
+      prompt = prompt,
+      // Only allow sending once the model can actually accept a message.
+      sendEnabled =
+        modelInitStatus is Model.InitializationStatus.Initialized &&
+          !llmChatUiState.isResettingSession,
+      onConfirm = {
+        pendingExternalPrompt = null
+        sendMessageTrigger =
+          SendMessageTrigger(
+            model = selectedModel,
+            messages = listOf(ChatMessageText(content = prompt, side = ChatSide.USER)),
+          )
+      },
+      onDismiss = { pendingExternalPrompt = null },
+    )
+  }
+}
+
+private fun updateProgressPanel(viewModel: LlmChatViewModel, model: Model, agentTools: AgentTools) {
+  // Update status.
+  val lastProgressPanelMessage =
+    viewModel.getLastMessageWithType(
+      model = model,
+      type = ChatMessageType.COLLAPSABLE_PROGRESS_PANEL,
+    )
+  if (
+    lastProgressPanelMessage != null &&
+      lastProgressPanelMessage is ChatMessageCollapsableProgressPanel
+  ) {
+    if (lastProgressPanelMessage.title.startsWith("Loading")) {
+      agentTools.sendToolAction(
+        SkillProgressToolAction(
+          label = lastProgressPanelMessage.title.replace("Loading", "Loaded"),
+          inProgress = false,
+        )
+      )
+    } else if (lastProgressPanelMessage.title.startsWith("Calling")) {
+      agentTools.sendToolAction(
+        SkillProgressToolAction(
+          label = lastProgressPanelMessage.title.replace("Calling", "Called"),
+          inProgress = false,
+        )
+      )
+    } else if (lastProgressPanelMessage.title.startsWith("Executing")) {
+      agentTools.sendToolAction(
+        SkillProgressToolAction(
+          label = lastProgressPanelMessage.title.replace("Executing", "Executed"),
+          inProgress = false,
+        )
+      )
+    } else {
+      agentTools.sendToolAction(
+        SkillProgressToolAction(label = lastProgressPanelMessage.title, inProgress = false)
+      )
+    }
+  }
+}
+
+private fun resetSessionWithCurrentSkillsAndMcps(
+  viewModel: LlmChatViewModel,
+  modelManagerViewModel: ModelManagerViewModel,
+  skillManagerViewModel: SkillManagerViewModel,
+  task: Task,
+  curSystemPrompt: String,
+  agentTools: AgentTools,
+  onDone: (Model) -> Unit = {},
+  initialMessages: List<ChatMessage> = listOf(),
+  clearHistory: Boolean = true,
+) {
+  val model = modelManagerViewModel.uiState.value.selectedModel
+  val litertMessages = initialMessages.mapNotNull { convertToLitertMessage(it) }
+  val toolsPrompt = agentTools.mcpManagerViewModel.getToolsPrompt()
+  val actualSystemPrompt = getEffectiveBaseSystemPrompt(curSystemPrompt, toolsPrompt.isNotEmpty())
+
+  val selectedSkills =
+    runBlocking(Dispatchers.Default) { skillManagerViewModel.skillManager.getAvailableSkills() }
+  val finalSystemPrompt =
+    PromptExpander()
+      .formatSystemInstructions(
+        template = actualSystemPrompt,
+        substitutions =
+          mapOf(
+            "___SKILLS___" to formatSelectedSkills(selectedSkills),
+            "___TOOLS___" to toolsPrompt,
+          ),
+      )
+
+  viewModel.resetSession(
+    task = task,
+    model = model,
+    systemInstruction = finalSystemPrompt,
+    actionChannel = agentTools.sendActionChannel,
+    supportImage = model.supportImage,
+    supportAudio = model.supportAudio,
+    onDone = { onDone(model) },
+    enableConversationConstrainedDecoding = true,
+    initialMessages = litertMessages,
+    clearHistory = clearHistory,
+  )
+}
+
+private fun attachJsBridge(webView: WebView, jsInterface: ChatWebViewJavascriptInterface) {
+  webView.addJavascriptInterface(jsInterface, JS_BRIDGE_NAME)
+}
+
+internal class ChatWebViewJavascriptInterface {
+  private data class PendingInvocation(val token: String, val listener: (String) -> Unit)
+
+  private val pendingInvocation = AtomicReference<PendingInvocation?>(null)
+
+  fun bindInvocation(token: String, listener: (String) -> Unit) {
+    pendingInvocation.set(PendingInvocation(token = token, listener = listener))
+  }
+
+  fun clearInvocation() {
+    pendingInvocation.set(null)
+  }
+
+  @JavascriptInterface
+  fun onResultReady(token: String, result: String) {
+    val current = pendingInvocation.get()
+    if (token.isNotEmpty() && current != null && current.token == token) {
+      if (pendingInvocation.compareAndSet(current, null)) {
+        current.listener.invoke(result)
+      }
+    } else {
+      Log.w(TAG, "Rejected JS bridge callback with mismatched invocation token.")
+    }
+  }
+}
+
+internal class ChatWebViewClient(context: Context) : BaseGalleryWebViewClient(context = context) {
+  @Volatile private var onPageLoaded: (() -> Unit)? = null
+  @Volatile var allowedOrigin: String? = null
+
+  fun setPageLoadListener(listener: (() -> Unit)?) {
+    onPageLoaded = listener
+  }
+
+  override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+    if (super.shouldOverrideUrlLoading(view, request)) {
+      return true
+    }
+    return isCrossOriginNavigationBlocked(request?.url?.toString())
+  }
+
+  @Deprecated("Deprecated in Java")
+  override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+    @Suppress("DEPRECATION")
+    if (super.shouldOverrideUrlLoading(view, url)) {
+      return true
+    }
+    return isCrossOriginNavigationBlocked(url)
+  }
+
+  private fun isCrossOriginNavigationBlocked(targetUrl: String?): Boolean {
+    val expectedOrigin = allowedOrigin
+    val targetOrigin = WebViewUrlPolicy.extractHttpsOrigin(targetUrl)
+    if (expectedOrigin == null || targetOrigin != expectedOrigin) {
+      Log.w(
+        TAG,
+        "Blocked skill WebView navigation from expected origin $expectedOrigin to $targetOrigin",
+      )
+      return true
+    }
+    return false
+  }
+
+  override fun onPageFinished(view: WebView?, url: String?) {
+    super.onPageFinished(view, url)
+    if (url == "about:blank") {
+      return
+    }
+    Log.d(TAG, "page loaded")
+    onPageLoaded?.invoke()
+  }
+}

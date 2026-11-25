@@ -1,0 +1,921 @@
+/*
+ * Copyright 2025 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.tress.app.ui.navigation
+
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import android.util.Log
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.EaseOutCubic
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.material3.Scaffold
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.core.util.Consumer
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.navigation.NavHostController
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.navArgument
+import com.tress.app.GalleryEvent
+import com.tress.app.core.design.glass.Aurora
+import com.tress.app.core.design.glass.AuroraMoods
+import com.tress.app.core.design.glass.GlassStage
+import com.tress.app.data.BuiltInTaskId
+import com.tress.app.customtasks.common.CustomTaskData
+import com.tress.app.customtasks.common.CustomTaskDataForBuiltinTask
+import com.tress.app.data.Model
+import com.tress.app.data.ModelDeepLinkResolution
+import com.tress.app.data.ModelDownloadStatusType
+import com.tress.app.data.ModelSelectionTarget
+import com.tress.app.data.ModelUtils
+import com.tress.app.data.Task
+import com.tress.app.data.isLegacyTasks
+import com.tress.app.firebaseAnalytics
+import com.tress.app.ui.benchmark.BenchmarkScreen
+import com.tress.app.ui.common.ErrorDialog
+import com.tress.app.ui.common.LocalTestAllowlistDialog
+import com.tress.app.ui.common.ModelPageAppBar
+import com.tress.app.ui.common.OnAppBackgroundedEffect
+import com.tress.app.ui.common.chat.ModelDownloadStatusInfoPanel
+import com.tress.app.ui.common.tos.TosViewModel
+import com.tress.app.ui.home.HomeScreen
+import com.tress.app.ui.modelmanager.GlobalModelManager
+import com.tress.app.ui.modelmanager.MODEL_ALLOWLIST_TEST_FILE_PATH
+import com.tress.app.ui.modelmanager.ModelManager
+import com.tress.app.ui.modelmanager.ModelManagerViewModel
+import com.tress.app.ui.modelmanager.SectionedModelSelectionScreen
+import com.tress.app.ui.modelmanager.asModelSelectionHost
+import com.tress.app.ui.modelmanager.isSavedModelSelectionComplete
+import com.tress.app.ui.modelmanager.stopActiveVoicePreview
+import com.tress.app.ui.notifications.NotificationsScreen
+import com.kyant.backdrop.throttleBackdrops
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
+private const val TAG = "AGGalleryNavGraph"
+private const val ROUTE_HOMESCREEN = "homepage"
+private const val ROUTE_MODEL_LIST = "model_list"
+private const val ROUTE_MODEL = "route_model"
+private const val ROUTE_BENCHMARK = "benchmark"
+private const val ROUTE_MODEL_MANAGER = "model_manager"
+private const val ARG_IMPORT_URL = "import_url"
+private const val ARG_FOCUS_MODEL = "focus_model"
+private const val ARG_OPEN_TRY_IT = "open_try_it"
+private val SUPPORTED_CUSTOM_SCHEMES = setOf("com.tress.app", "tress")
+private const val ROUTE_NOTIFICATIONS = "notifications"
+private const val NAV_ANIMATION_DURATION_MS = 190
+private val NAV_ANIMATION_EASING = EaseOutCubic
+
+private fun navSlideTween(): FiniteAnimationSpec<IntOffset> {
+  return tween(NAV_ANIMATION_DURATION_MS, easing = NAV_ANIMATION_EASING)
+}
+
+private fun AnimatedContentTransitionScope<*>.slidePushEnter(): EnterTransition {
+  return slideIntoContainer(
+    animationSpec = navSlideTween(),
+    towards = AnimatedContentTransitionScope.SlideDirection.Left,
+  ) + fadeIn(tween(150)) + androidx.compose.animation.scaleIn(initialScale = 0.97f, animationSpec = tween(190, easing = EaseOutCubic))
+}
+
+private fun AnimatedContentTransitionScope<*>.slidePushExit(): ExitTransition {
+  return slideOutOfContainer(
+    animationSpec = navSlideTween(),
+    towards = AnimatedContentTransitionScope.SlideDirection.Left,
+    targetOffset = { -it / 4 },
+  ) + fadeOut(tween(140)) + androidx.compose.animation.scaleOut(targetScale = 0.98f, animationSpec = tween(180))
+}
+
+private fun AnimatedContentTransitionScope<*>.slidePopEnter(): EnterTransition {
+  return slideIntoContainer(
+    animationSpec = navSlideTween(),
+    towards = AnimatedContentTransitionScope.SlideDirection.Right,
+    initialOffset = { -it / 4 },
+  ) + fadeIn(tween(150)) + androidx.compose.animation.scaleIn(initialScale = 0.98f, animationSpec = tween(190, easing = EaseOutCubic))
+}
+
+private fun AnimatedContentTransitionScope<*>.slidePopExit(): ExitTransition {
+  return slideOutOfContainer(
+    animationSpec = navSlideTween(),
+    towards = AnimatedContentTransitionScope.SlideDirection.Right,
+  ) + fadeOut(tween(140))
+}
+
+private fun AnimatedContentTransitionScope<*>.slideUpEnter(): EnterTransition {
+  return slideIntoContainer(
+    animationSpec = navSlideTween(),
+    towards = AnimatedContentTransitionScope.SlideDirection.Up,
+  ) + fadeIn(tween(200))
+}
+
+private fun AnimatedContentTransitionScope<*>.slideDownExit(): ExitTransition {
+  return slideOutOfContainer(
+    animationSpec = navSlideTween(),
+    towards = AnimatedContentTransitionScope.SlideDirection.Down,
+  ) + fadeOut(tween(180))
+}
+
+/** Navigation routes. */
+@Composable
+fun GalleryNavHost(
+  navController: NavHostController,
+  modifier: Modifier = Modifier,
+  modelManagerViewModel: ModelManagerViewModel,
+  tosViewModel: TosViewModel = hiltViewModel(),
+) {
+  val lifecycleOwner = LocalLifecycleOwner.current
+  var pickedTask by remember { mutableStateOf<Task?>(null) }
+  var enableHomeScreenAnimation by remember { mutableStateOf(true) }
+  var enableModelListAnimation by remember { mutableStateOf(true) }
+  // The section the model selection screen expands when a task sends the user back to it.
+  var modelSelectionTargetToExpand by remember { mutableStateOf<ModelSelectionTarget?>(null) }
+  val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
+
+  // Track whether app is in foreground.
+  DisposableEffect(lifecycleOwner) {
+    val observer = LifecycleEventObserver { _, event ->
+      when (event) {
+        Lifecycle.Event.ON_START,
+        Lifecycle.Event.ON_RESUME -> {
+          modelManagerViewModel.setAppInForeground(foreground = true)
+        }
+        Lifecycle.Event.ON_STOP,
+        Lifecycle.Event.ON_PAUSE -> {
+          modelManagerViewModel.setAppInForeground(foreground = false)
+        }
+        else -> {
+          /* Do nothing for other events */
+        }
+      }
+    }
+
+    lifecycleOwner.lifecycle.addObserver(observer)
+
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  }
+
+  // Don't keep playing a voice preview after the app leaves the foreground.
+  OnAppBackgroundedEffect { modelManagerViewModel.stopActiveVoicePreview() }
+
+  val navBackStackEntry by navController.currentBackStackEntryAsState()
+  val currentRoute = navBackStackEntry?.destination?.route ?: ROUTE_HOMESCREEN
+  val currentTaskId = navBackStackEntry?.arguments?.getString("taskId")
+  val auroraMood = when {
+    currentRoute.startsWith(ROUTE_MODEL_MANAGER) || currentRoute == ROUTE_MODEL_LIST -> AuroraMoods.Models
+    currentRoute.startsWith(ROUTE_BENCHMARK) -> AuroraMoods.Benchmark
+    currentRoute.startsWith(ROUTE_NOTIFICATIONS) -> AuroraMoods.Settings
+    currentRoute.startsWith(ROUTE_MODEL) && currentTaskId == BuiltInTaskId.LLM_AGENT_CHAT -> AuroraMoods.Skills
+    currentRoute.startsWith(ROUTE_MODEL) -> AuroraMoods.Chat
+    else -> AuroraMoods.Home
+  }
+
+  GlassStage(
+    wallpaper = { Aurora(mood = auroraMood) },
+    screens = {
+      NavHost(
+        navController = navController,
+        startDestination = ROUTE_HOMESCREEN,
+        enterTransition = { slidePushEnter() },
+        exitTransition = { slidePushExit() },
+        popEnterTransition = { slidePopEnter() },
+        popExitTransition = { slidePopExit() },
+      ) {
+    // Home screen.
+    composable(route = ROUTE_HOMESCREEN) {
+      HomeScreen(
+        modelManagerViewModel = modelManagerViewModel,
+        tosViewModel = tosViewModel,
+        enableAnimation = enableHomeScreenAnimation,
+        navigateToTaskScreen = { task ->
+          pickedTask = task
+          enableModelListAnimation = true
+          navController.navigate(ROUTE_MODEL_LIST)
+          firebaseAnalytics?.logEvent(
+            GalleryEvent.CAPABILITY_SELECT.id,
+            Bundle().apply { putString("capability_name", task.id) },
+          )
+        },
+        onModelsClicked = { navController.navigate(ROUTE_MODEL_MANAGER) },
+        onNotificationsClicked = { navController.navigate(ROUTE_NOTIFICATIONS) },
+        onLaunchModelTask = { taskId, modelName, sessionId ->
+          val baseRoute = "$ROUTE_MODEL/${Uri.encode(taskId)}/${Uri.encode(modelName)}"
+          val route =
+            if (!sessionId.isNullOrBlank()) "$baseRoute?sessionId=${Uri.encode(sessionId)}"
+            else baseRoute
+          navController.navigate(route)
+        },
+        onBenchmarkClicked = { model ->
+          firebaseAnalytics?.logEvent(
+            GalleryEvent.CAPABILITY_SELECT.id,
+            Bundle().apply { putString("capability_name", "benchmark_${model.name}") },
+          )
+          navController.navigate("$ROUTE_BENCHMARK/${Uri.encode(model.name)}")
+        },
+        modifier = modifier,
+      )
+    }
+
+    // Model list.
+    composable(
+      route = ROUTE_MODEL_LIST,
+      enterTransition = { slidePushEnter() },
+      exitTransition = { slidePushExit() },
+      popEnterTransition = { slidePopEnter() },
+      popExitTransition = { slidePopExit() },
+    ) {
+      pickedTask?.let {
+        val selectionConfig =
+          modelManagerViewModel.getCustomTaskByTaskId(it.id)?.modelSelectionConfig
+        if (selectionConfig != null) {
+          // Tasks that need several models picked together get the sectioned selection screen.
+          SectionedModelSelectionScreen(
+            task = it,
+            config = selectionConfig,
+            modelManagerViewModel = modelManagerViewModel,
+            enableAnimation = enableModelListAnimation,
+            navigateUp = {
+              enableHomeScreenAnimation = false
+              navController.navigateUp()
+            },
+            onLaunch = { model ->
+              modelManagerViewModel.selectModel(model)
+              navController.navigate("$ROUTE_MODEL/${it.id}/${model.name}")
+            },
+            expandTarget = modelSelectionTargetToExpand,
+            onExpandTargetHandled = { modelSelectionTargetToExpand = null },
+          )
+        } else {
+          ModelManager(
+            viewModel = modelManagerViewModel,
+            task = it,
+            enableAnimation = enableModelListAnimation,
+            onModelClicked = { model ->
+              modelManagerViewModel.selectModel(model)
+              navController.navigate("$ROUTE_MODEL/${it.id}/${model.name}")
+            },
+            onBenchmarkClicked = { model ->
+              firebaseAnalytics?.logEvent(
+                GalleryEvent.CAPABILITY_SELECT.id,
+                Bundle().apply { putString("capability_name", "benchmark_${model.name}") },
+              )
+              navController.navigate("$ROUTE_BENCHMARK/${model.name}")
+            },
+            navigateUp = {
+              enableHomeScreenAnimation = false
+              navController.navigateUp()
+            },
+          )
+        }
+      }
+    }
+
+    // Model page.
+    composable(
+      route = "$ROUTE_MODEL/{taskId}/{modelName}?query={query}&sessionId={sessionId}",
+      arguments =
+        listOf(
+          navArgument("taskId") { type = NavType.StringType },
+          navArgument("modelName") { type = NavType.StringType },
+          navArgument("query") {
+            type = NavType.StringType
+            nullable = true
+            defaultValue = null
+          },
+          navArgument("sessionId") {
+            type = NavType.StringType
+            nullable = true
+            defaultValue = null
+          },
+        ),
+      enterTransition = { slidePushEnter() },
+      exitTransition = { slidePushExit() },
+      popEnterTransition = { slidePopEnter() },
+      popExitTransition = { slidePopExit() },
+    ) { backStackEntry ->
+      val modelName = backStackEntry.arguments?.getString("modelName") ?: ""
+      val taskId = backStackEntry.arguments?.getString("taskId") ?: ""
+      val queryParam = backStackEntry.arguments?.getString("query")
+      val sessionIdParam = backStackEntry.arguments?.getString("sessionId")
+      val scope = rememberCoroutineScope()
+      val context = LocalContext.current
+
+      modelManagerViewModel.getModelByName(name = modelName)?.let { initialModel ->
+        val customTask = modelManagerViewModel.getCustomTaskByTaskId(id = taskId)
+        // A task with a model selection screen only starts with a complete saved selection. Entry
+        // points that skip the selection screen (the global model manager, deep links, download
+        // notifications and STARTUP_SCREEN) are redirected to it otherwise. This is checked once on
+        // entry, so later status changes don't pull the user out of a running task.
+        val needsModelSelection =
+          remember(backStackEntry) {
+            val selectionConfig = customTask?.modelSelectionConfig
+            customTask != null &&
+              selectionConfig != null &&
+              !modelManagerViewModel
+                .asModelSelectionHost()
+                .isSavedModelSelectionComplete(
+                  task = customTask.task,
+                  config = selectionConfig,
+                  mainModel = initialModel,
+                )
+          }
+        if (needsModelSelection && customTask != null) {
+          LaunchedEffect(backStackEntry) {
+            Log.d(TAG, "Incomplete model selection for '${customTask.task.id}'. Opening selection.")
+            pickedTask = customTask.task
+            enableModelListAnimation = true
+            navController.navigate(ROUTE_MODEL_LIST) {
+              popUpTo(backStackEntry.destination.id) { inclusive = true }
+            }
+          }
+        } else {
+          LaunchedEffect(modelName) { modelManagerViewModel.selectModel(initialModel) }
+
+          if (customTask != null) {
+            if (isLegacyTasks(customTask.task.id)) {
+              customTask.MainScreen(
+                data =
+                  CustomTaskDataForBuiltinTask(
+                    modelManagerViewModel = modelManagerViewModel,
+                    onNavUp = {
+                      enableModelListAnimation = false
+                      navController.navigateUp()
+                    },
+                    initialQuery = queryParam,
+                    initialSessionId = sessionIdParam,
+                  )
+              )
+            } else {
+              var disableAppBarControls by remember { mutableStateOf(false) }
+              var disableAppBarActions by remember { mutableStateOf(false) }
+              var hideTopBar by remember { mutableStateOf(false) }
+              var customNavigateUpCallback by remember { mutableStateOf<(() -> Unit)?>(null) }
+              var customPromptProvider by remember { mutableStateOf<(() -> String)?>(null) }
+              var customOnPromptChanged by remember { mutableStateOf<((String) -> Unit)?>(null) }
+              var customHistoryClickHandler by remember { mutableStateOf<(() -> Unit)?>(null) }
+              var customDefaultPromptProvider by remember { mutableStateOf<(() -> String)?>(null) }
+              fun cleanUpModelsOnLeave() {
+                if (!customTask.keepModelAlive) {
+                  // clean up all models.
+                  for (curModel in customTask.task.models) {
+                    val instanceToCleanUp = curModel.instance
+                    scope.launch(Dispatchers.Default) {
+                      modelManagerViewModel.cleanupModel(
+                        context = context,
+                        task = customTask.task,
+                        model = curModel,
+                        instanceToCleanUp = instanceToCleanUp,
+                      )
+                    }
+                  }
+                }
+              }
+              CustomTaskScreen(
+                task = customTask.task,
+                initialModel = initialModel,
+                modelManagerViewModel = modelManagerViewModel,
+                disableAppBarControls = disableAppBarControls,
+                disableAppBarActions = disableAppBarActions,
+                hideTopBar = hideTopBar,
+                useThemeColor = customTask.task.useThemeColor,
+                onNavigateUp = {
+                  if (customNavigateUpCallback != null) {
+                    customNavigateUpCallback?.invoke()
+                  } else {
+                    enableModelListAnimation = false
+                    navController.navigateUp()
+                    cleanUpModelsOnLeave()
+                  }
+                },
+                allowEditingSystemPrompt = customPromptProvider != null,
+                curSystemPrompt =
+                  customPromptProvider?.invoke() ?: customTask.task.defaultSystemPrompt,
+                defaultSystemPrompt =
+                  customDefaultPromptProvider?.invoke() ?: customTask.task.defaultSystemPrompt,
+                onSystemPromptChanged = { newPrompt -> customOnPromptChanged?.invoke(newPrompt) },
+                onHistoryClicked = customHistoryClickHandler,
+              ) { bottomPadding ->
+                customTask.MainScreen(
+                  data =
+                    CustomTaskData(
+                      modelManagerViewModel = modelManagerViewModel,
+                      bottomPadding = bottomPadding,
+                      setAppBarControlsDisabled = { disableAppBarControls = it },
+                      setAppBarActionsDisabled = { disableAppBarActions = it },
+                      setTopBarVisible = { hideTopBar = !it },
+                      setCustomNavigateUpCallback = { customNavigateUpCallback = it },
+                      setSystemPromptProvider = { provider, onPromptChanged ->
+                        customPromptProvider = provider
+                        customOnPromptChanged = onPromptChanged
+                      },
+                      setHistoryClickHandler = { customHistoryClickHandler = it },
+                      setDefaultSystemPromptProvider = { customDefaultPromptProvider = it },
+                      navigateToModelSelection = { target ->
+                        if (customTask.modelSelectionConfig != null) {
+                          Log.d(TAG, "Opening the model selection of '${customTask.task.id}'")
+                          pickedTask = customTask.task
+                          modelSelectionTargetToExpand = target
+                          enableModelListAnimation = false
+                          // Return to the selection screen the task was launched from, keeping
+                          // its selection, or open it if the task was opened from elsewhere.
+                          if (!navController.popBackStack(ROUTE_MODEL_LIST, inclusive = false)) {
+                            navController.navigate(ROUTE_MODEL_LIST) {
+                              popUpTo(backStackEntry.destination.id) { inclusive = true }
+                            }
+                          }
+                          cleanUpModelsOnLeave()
+                        }
+                      },
+                    )
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Global model manager page.
+    composable(
+      route =
+        "$ROUTE_MODEL_MANAGER?$ARG_IMPORT_URL={$ARG_IMPORT_URL}&$ARG_FOCUS_MODEL={$ARG_FOCUS_MODEL}&$ARG_OPEN_TRY_IT={$ARG_OPEN_TRY_IT}",
+      arguments =
+        listOf(
+          navArgument(ARG_IMPORT_URL) {
+            type = NavType.StringType
+            nullable = true
+            defaultValue = null
+          },
+          navArgument(ARG_FOCUS_MODEL) {
+            nullable = true
+            defaultValue = null
+          },
+          navArgument(ARG_OPEN_TRY_IT) { defaultValue = false },
+        ),
+      enterTransition = {
+        if (
+          initialState.destination.route?.startsWith(ROUTE_BENCHMARK) == true ||
+            initialState.destination.route?.startsWith(ROUTE_MODEL) == true
+        ) {
+          slidePopEnter()
+        } else {
+          slideUpEnter()
+        }
+      },
+      exitTransition = {
+        if (
+          targetState.destination.route?.startsWith(ROUTE_BENCHMARK) == true ||
+            targetState.destination.route?.startsWith(ROUTE_MODEL) == true
+        ) {
+          slidePushExit()
+        } else {
+          fadeOut(tween(180))
+        }
+      },
+      popEnterTransition = {
+        if (
+          initialState.destination.route?.startsWith(ROUTE_BENCHMARK) == true ||
+            initialState.destination.route?.startsWith(ROUTE_MODEL) == true
+        ) {
+          slidePopEnter()
+        } else {
+          fadeIn(tween(180))
+        }
+      },
+      popExitTransition = {
+        if (
+          targetState.destination.route?.startsWith(ROUTE_BENCHMARK) == true ||
+            targetState.destination.route?.startsWith(ROUTE_MODEL) == true
+        ) {
+          slidePopExit()
+        } else {
+          slideDownExit()
+        }
+      },
+    ) { backStackEntry ->
+      val importUrl = backStackEntry.arguments?.getString(ARG_IMPORT_URL)
+      val focusModelName = backStackEntry.arguments?.getString(ARG_FOCUS_MODEL)
+      val openTryIt = backStackEntry.arguments?.getBoolean(ARG_OPEN_TRY_IT) ?: false
+      GlobalModelManager(
+        viewModel = modelManagerViewModel,
+        tosViewModel = tosViewModel,
+        initialImportUrl = importUrl,
+        initialFocusModelName = focusModelName,
+        initialOpenTryIt = openTryIt,
+        supplementaryModelsViewModel = hiltViewModel(),
+        navigateUp = {
+          enableHomeScreenAnimation = false
+          navController.navigateUp()
+        },
+        onModelSelected = { task, model ->
+          navController.navigate("$ROUTE_MODEL/${task.id}/${model.name}")
+        },
+        onBenchmarkClicked = { model ->
+          firebaseAnalytics?.logEvent(
+            GalleryEvent.CAPABILITY_SELECT.id,
+            Bundle().apply { putString("capability_name", "benchmark_${model.name}") },
+          )
+          navController.navigate("$ROUTE_BENCHMARK/${model.name}")
+        },
+      )
+    }
+
+    // Notifications page.
+    composable(
+      route = ROUTE_NOTIFICATIONS,
+      enterTransition = { slideUpEnter() },
+      exitTransition = { fadeOut(tween(180)) },
+      popEnterTransition = { fadeIn(tween(180)) },
+      popExitTransition = { slideDownExit() },
+    ) {
+      NotificationsScreen(navigateUp = { navController.navigateUp() })
+    }
+
+    // Benchmark creation page.
+    composable(
+      route = "$ROUTE_BENCHMARK/{modelName}",
+      arguments = listOf(navArgument("modelName") { type = NavType.StringType }),
+      enterTransition = { slidePushEnter() },
+      exitTransition = { slidePushExit() },
+      popEnterTransition = { slidePopEnter() },
+      popExitTransition = { slidePopExit() },
+    ) { backStackEntry ->
+      val modelName = backStackEntry.arguments?.getString("modelName") ?: ""
+
+      modelManagerViewModel.getModelByName(name = modelName)?.let { model ->
+        BenchmarkScreen(
+          initialModel = model,
+          modelManagerViewModel = modelManagerViewModel,
+          onBackClicked = {
+            enableModelListAnimation = false
+            navController.navigateUp()
+          },
+        )
+      }
+    }
+  }
+    },
+    chrome = {},
+  )
+
+  // Shown on top of whichever screen is active, since the app may skip the home screen at launch
+  // (e.g. via the STARTUP_SCREEN flag or a deep link).
+  if (modelManagerUiState.showLocalTestAllowlistDialog) {
+    LocalTestAllowlistDialog(
+      filePath = MODEL_ALLOWLIST_TEST_FILE_PATH,
+      onDismiss = { modelManagerViewModel.dismissLocalTestAllowlistDialog() },
+    )
+  }
+
+  // Handle incoming intents for deep links (both cold start and warm onNewIntent).
+  val activity = LocalActivity.current
+  var intentVersion by remember { mutableIntStateOf(0) }
+  DisposableEffect(activity) {
+    val componentActivity = activity as? ComponentActivity
+    val listener = Consumer<Intent> { intentVersion++ }
+    componentActivity?.addOnNewIntentListener(listener)
+    onDispose { componentActivity?.removeOnNewIntentListener(listener) }
+  }
+
+  LaunchedEffect(intentVersion, activity, modelManagerUiState.tasks) {
+    val intent = activity?.intent
+    val data = intent?.data
+    // Wait until the model manager has been initialized and the tasks are available.
+    if (data != null && modelManagerUiState.tasks.isNotEmpty()) {
+      intent.data = null
+      val scheme = data.scheme?.lowercase()
+      Log.d(TAG, "navigation link clicked: $data")
+      when {
+        // 1. Precise model deep links: com.tress.app://model/<taskId>/<modelName>
+        scheme in SUPPORTED_CUSTOM_SCHEMES && data.host?.lowercase() == "model" -> {
+          if (data.pathSegments.size >= 2) {
+            val taskId = data.pathSegments[data.pathSegments.size - 2]
+            val modelName = data.pathSegments.last()
+            val queryStr = data.getQueryParameter("query")
+            modelManagerViewModel.getModelByName(name = modelName)?.let { model ->
+              val encodedTaskId = Uri.encode(taskId)
+              val encodedModelName = Uri.encode(model.name)
+              val route =
+                if (!queryStr.isNullOrEmpty()) {
+                  "$ROUTE_MODEL/$encodedTaskId/$encodedModelName?query=${Uri.encode(queryStr)}"
+                } else {
+                  "$ROUTE_MODEL/$encodedTaskId/$encodedModelName"
+                }
+              navController.navigate(route)
+            }
+          } else {
+            Log.e(TAG, "Malformed deep link URI received: $data")
+          }
+        }
+        isModelManagerOrImportDeepLink(data) -> {
+          val importUrl =
+            (data.getQueryParameter(ARG_IMPORT_URL) ?: data.getQueryParameter("url"))?.trim()
+          val requestedTaskId = data.getQueryParameter("task")?.trim()
+          when (
+            val resolution =
+              ModelUtils.resolveModelDeepLink(
+                rawImportUrl = importUrl,
+                models = modelManagerViewModel.getAllModels(),
+                tasks = modelManagerUiState.tasks,
+                downloadStatuses = modelManagerUiState.modelDownloadStatus,
+                requestedTaskId = requestedTaskId,
+              )
+          ) {
+            ModelDeepLinkResolution.OpenModelManagerDefault -> {
+              navController.navigate(ROUTE_MODEL_MANAGER)
+            }
+            is ModelDeepLinkResolution.OpenImportFlow -> {
+              navController.navigate(
+                "$ROUTE_MODEL_MANAGER?$ARG_IMPORT_URL=${Uri.encode(resolution.importUrl)}"
+              )
+            }
+            is ModelDeepLinkResolution.FocusModelInManager -> {
+              navController.navigate(
+                "$ROUTE_MODEL_MANAGER?$ARG_FOCUS_MODEL=${Uri.encode(resolution.modelName)}&$ARG_OPEN_TRY_IT=${resolution.openTryIt}"
+              )
+            }
+            is ModelDeepLinkResolution.NavigateToTask -> {
+              navController.navigate(
+                "$ROUTE_MODEL_MANAGER?$ARG_FOCUS_MODEL=${Uri.encode(resolution.modelName)}"
+              )
+              navController.navigate(
+                "$ROUTE_MODEL/${Uri.encode(resolution.taskId)}/${Uri.encode(resolution.modelName)}"
+              )
+            }
+          }
+        }
+        scheme in SUPPORTED_CUSTOM_SCHEMES -> {
+          // 2. Dynamic task-level deep links: com.tress.app://<taskId>
+          val host = data.host
+          if (host != null) {
+            val queryStr = data.getQueryParameter("query")
+            val task = modelManagerUiState.tasks.find { it.id == host }
+            if (task != null) {
+              // Pick the first successfully downloaded model or the default active model for this
+              // task
+              val defaultModel =
+                task.models.firstOrNull { model ->
+                  modelManagerUiState.modelDownloadStatus[model.name]?.status ==
+                    ModelDownloadStatusType.SUCCEEDED
+                } ?: task.models.firstOrNull()
+
+              if (defaultModel != null) {
+                val encodedTaskId = Uri.encode(task.id)
+                val encodedModelName = Uri.encode(defaultModel.name)
+                val route =
+                  if (!queryStr.isNullOrEmpty()) {
+                    "$ROUTE_MODEL/$encodedTaskId/$encodedModelName?query=${Uri.encode(queryStr)}"
+                  } else {
+                    "$ROUTE_MODEL/$encodedTaskId/$encodedModelName"
+                  }
+                navController.navigate(route)
+              } else {
+                Log.e(TAG, "No available model found for task: $host")
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+private fun isModelManagerOrImportDeepLink(data: Uri): Boolean {
+  val scheme = data.scheme?.lowercase()
+  val host = data.host?.lowercase()
+  if (scheme in SUPPORTED_CUSTOM_SCHEMES && (host == "global_model_manager" || host == "import")) {
+    return true
+  }
+  val path = data.path
+  if (
+    scheme == "https" &&
+      host == "developers.google.com" &&
+      (path == "/edge/gallery/open" || path?.startsWith("/edge/gallery/open/") == true)
+  ) {
+    return true
+  }
+  return false
+}
+
+@Composable
+private fun CustomTaskScreen(
+  task: Task,
+  initialModel: Model,
+  modelManagerViewModel: ModelManagerViewModel,
+  disableAppBarControls: Boolean,
+  disableAppBarActions: Boolean,
+  hideTopBar: Boolean,
+  useThemeColor: Boolean,
+  onNavigateUp: () -> Unit,
+  allowEditingSystemPrompt: Boolean = false,
+  curSystemPrompt: String = "",
+  defaultSystemPrompt: String = task.defaultSystemPrompt,
+  onSystemPromptChanged: (String) -> Unit = {},
+  onHistoryClicked: (() -> Unit)? = null,
+  content: @Composable (bottomPadding: Dp) -> Unit,
+) {
+  val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
+  // Use currentModel on initial composition to prevent reading stale selectedModel from
+  // ViewModel before selectModel() runs. Once ViewModel synchronizes with the current model,
+  // use the live model instance from uiState to capture ongoing configuration/state updates.
+  var currentModel by remember(initialModel.name) { mutableStateOf(initialModel) }
+  val selectedModel =
+    if (modelManagerUiState.selectedModel.name == currentModel.name) {
+      modelManagerUiState.selectedModel
+    } else {
+      currentModel
+    }
+  val scope = rememberCoroutineScope()
+  val context = LocalContext.current
+  var navigatingUp by remember { mutableStateOf(false) }
+  var showErrorDialog by remember { mutableStateOf(false) }
+  var appBarHeight by remember { mutableIntStateOf(0) }
+
+  val handleNavigateUp = {
+    navigatingUp = true
+    onNavigateUp()
+  }
+
+  // Handle system's edge swipe.
+  BackHandler { handleNavigateUp() }
+
+  // Initialize model when model/download state changes.
+  val curDownloadStatus = modelManagerUiState.modelDownloadStatus[selectedModel.name]
+  LaunchedEffect(curDownloadStatus, selectedModel.name) {
+    if (!navigatingUp) {
+      if (curDownloadStatus?.status == ModelDownloadStatusType.SUCCEEDED) {
+        Log.d(
+          TAG,
+          "Initializing model '${selectedModel.name}' from CustomTaskScreen launched effect",
+        )
+        modelManagerViewModel.initializeModel(context, task = task, model = selectedModel)
+      }
+    }
+  }
+
+  val modelInitStatus by selectedModel.initStatusFlow.collectAsState()
+  LaunchedEffect(modelInitStatus) {
+    showErrorDialog = modelInitStatus is Model.InitializationStatus.Failed
+  }
+
+  Scaffold(
+    containerColor = androidx.compose.ui.graphics.Color.Transparent,
+    topBar = {
+      AnimatedVisibility(
+        !hideTopBar,
+        enter = slideInVertically { -it },
+        exit = slideOutVertically { -it },
+      ) {
+        ModelPageAppBar(
+          task = task,
+          model = selectedModel,
+          modelManagerViewModel = modelManagerViewModel,
+          inProgress = disableAppBarControls,
+          modelPreparing = disableAppBarControls,
+          actionsDisabled = disableAppBarActions,
+          shouldShowHistoryButton = onHistoryClicked != null,
+          onHistoryClicked = { onHistoryClicked?.invoke() },
+          useThemeColor = useThemeColor,
+          modifier =
+            Modifier.onGloballyPositioned { coordinates -> appBarHeight = coordinates.size.height },
+          hideModelSelector = task.models.size <= 1,
+          onConfigChanged = { _, _ -> },
+          onBackClicked = { handleNavigateUp() },
+          onModelSelected = { prevModel, newSelectedModel ->
+            currentModel = newSelectedModel
+            val instanceToCleanUp = prevModel.instance
+            scope.launch(Dispatchers.Default) {
+              // Clean up prev model.
+              if (prevModel.name != newSelectedModel.name) {
+                modelManagerViewModel.cleanupModel(
+                  context = context,
+                  task = task,
+                  model = prevModel,
+                  instanceToCleanUp = instanceToCleanUp,
+                )
+              }
+
+              // Update selected model.
+              Log.d(TAG, "from model picker. new: ${newSelectedModel.name}")
+              modelManagerViewModel.selectModel(model = newSelectedModel)
+            }
+          },
+          allowEditingSystemPrompt = allowEditingSystemPrompt,
+          curSystemPrompt = curSystemPrompt,
+          defaultSystemPrompt = defaultSystemPrompt,
+          onSystemPromptChanged = onSystemPromptChanged,
+        )
+      }
+    }
+  ) { innerPadding ->
+    // Calculate the target height in Dp for the content's top padding.
+    val targetPaddingDp =
+      if (!hideTopBar && appBarHeight > 0) {
+        // Convert measured pixel height to Dp
+        with(LocalDensity.current) { appBarHeight.toDp() }
+      } else {
+        WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+      }
+
+    // Animate the actual top padding value.
+    val animatedTopPadding by
+      animateDpAsState(
+        targetValue = targetPaddingDp,
+        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+        label = "TopPaddingAnimation",
+      )
+
+    Box(
+      modifier =
+        Modifier.padding(
+          top = if (!hideTopBar) innerPadding.calculateTopPadding() else animatedTopPadding,
+          start = innerPadding.calculateStartPadding(LocalLayoutDirection.current),
+          end = innerPadding.calculateStartPadding(LocalLayoutDirection.current),
+        )
+    ) {
+      val curModelDownloadStatus = modelManagerUiState.modelDownloadStatus[selectedModel.name]
+      AnimatedContent(
+        targetState = curModelDownloadStatus?.status == ModelDownloadStatusType.SUCCEEDED
+      ) { targetState ->
+        when (targetState) {
+          // Main UI when model is downloaded.
+          true -> content(innerPadding.calculateBottomPadding())
+          // Model download
+          false ->
+            ModelDownloadStatusInfoPanel(
+              model = selectedModel,
+              task = task,
+              modelManagerViewModel = modelManagerViewModel,
+            )
+        }
+      }
+    }
+  }
+
+  if (showErrorDialog) {
+    val initErrorMessage =
+      (modelInitStatus as? Model.InitializationStatus.Failed)?.error?.message ?: ""
+    ErrorDialog(
+      error = initErrorMessage,
+      onDismiss = {
+        showErrorDialog = false
+        onNavigateUp()
+      },
+    )
+  }
+}

@@ -16,7 +16,6 @@
 -->
 
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.google.ai.edge.gallery"
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
@@ -64,7 +63,7 @@
           Instead, just recompose the view.
          -->
         <activity
-            android:name="com.google.ai.edge.gallery.MainActivity"
+            android:name="com.tress.app.MainActivity"
             android:exported="true"
             android:theme="@style/Theme.Gallery.SplashScreen"
             android:screenOrientation="portrait"
@@ -84,8 +83,8 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
 
-                <data android:scheme="com.google.ai.edge.gallery" />
-                <data android:scheme="aiedgegallery" />
+                <data android:scheme="com.tress.app" />
+                <data android:scheme="tress" />
             </intent-filter>
             <!--
               developers.google.com/.well-known/assetlinks.json does not register this package, so
@@ -134,11 +133,11 @@
         </service>
 
         <receiver
-            android:name="com.google.ai.edge.gallery.notifications.NotificationReceiver"
+            android:name="com.tress.app.notifications.NotificationReceiver"
             android:exported="false" />
 
         <receiver
-            android:name="com.google.ai.edge.gallery.notifications.BootReceiver"
+            android:name="com.tress.app.notifications.BootReceiver"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
@@ -147,13 +146,13 @@
         <!-- Activity launched onto the glasses' projected display to receive touchpad gestures for
              XR Language Teacher. -->
         <activity
-            android:name="com.google.ai.edge.gallery.customtasks.xrlanguageteacher.xr.GlassesTapActivity"
+            android:name="com.tress.app.customtasks.xrlanguageteacher.xr.GlassesTapActivity"
             android:configChanges="uiMode|orientation|screenSize|screenLayout|smallestScreenSize|density|keyboard|keyboardHidden|navigation"
             android:excludeFromRecents="true"
             android:exported="false"
             android:launchMode="singleTop"
             android:requiredDisplayCategory="android.hardware.display.category.XR_PROJECTED"
-            android:taskAffinity="com.google.ai.edge.gallery.glasses"
+            android:taskAffinity="com.tress.app.glasses"
             android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
         <uses-native-library android:name="libvndksupport.so" android:required="false"/>
         <uses-native-library android:name="libOpenCL.so" android:required="false"/>

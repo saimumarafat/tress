@@ -1,0 +1,453 @@
+/*
+ * Copyright 2025 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.tress.app.ui.llmchat
+
+import androidx.hilt.navigation.compose.hiltViewModel
+import android.graphics.Bitmap
+import android.os.Bundle
+import android.util.Log
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import com.tress.app.GalleryEvent
+import com.tress.app.R
+import com.tress.app.agent.sessions.generateSessionId
+import com.tress.app.core.design.theme.glassColors
+import com.tress.app.core.design.typography.GalleryType
+import com.tress.app.data.BuiltInTaskId
+import com.tress.app.data.Model
+import com.tress.app.data.ModelCapability
+import com.tress.app.data.Task
+import com.tress.app.firebaseAnalytics
+import com.tress.app.ui.common.chat.ChatMessage
+import com.tress.app.ui.common.chat.ChatMessageAudioClip
+import com.tress.app.ui.common.chat.ChatMessageFile
+import com.tress.app.ui.common.chat.ChatMessageImage
+import com.tress.app.ui.common.chat.ChatMessageMapper
+import com.tress.app.ui.common.chat.ChatMessageText
+import com.tress.app.ui.common.chat.ChatSide
+import com.tress.app.ui.common.chat.ChatView
+import com.tress.app.ui.common.chat.SendMessageTrigger
+import com.tress.app.ui.modelmanager.ModelManagerViewModel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+
+private const val TAG = "AGLlmChatScreen"
+
+@Composable
+fun LlmChatScreen(
+  modelManagerViewModel: ModelManagerViewModel,
+  navigateUp: () -> Unit,
+  modifier: Modifier = Modifier,
+  taskId: String = BuiltInTaskId.LLM_CHAT,
+  onFirstToken: (Model) -> Unit = {},
+  onGenerateResponseDone: (Model) -> Unit = {},
+  onSkillClicked: () -> Unit = {},
+  onMcpClicked: () -> Unit = {},
+  onResetSessionClickedOverride: ((Task, Model, List<ChatMessage>, Boolean) -> Unit)? = null,
+  composableBelowMessageList: @Composable (Model) -> Unit = {},
+  viewModel: LlmChatViewModel = hiltViewModel(),
+  allowEditingSystemPrompt: Boolean = false,
+  curSystemPrompt: String = "",
+  onSystemPromptChanged: (String) -> Unit = {},
+  emptyStateComposable: @Composable (Model) -> Unit = {},
+  sendMessageTrigger: SendMessageTrigger? = null,
+  showImagePicker: Boolean = false,
+  showAudioPicker: Boolean = false,
+  showTextFilePicker: Boolean = false,
+  getActiveSkills: () -> List<String> = { emptyList() },
+  skillCount: Int = 0,
+  mcpCount: Int = 0,
+  mcpToolsCount: Int = 0,
+  initialSessionId: String? = null,
+) {
+  ChatViewWrapper(
+    viewModel = viewModel,
+    modelManagerViewModel = modelManagerViewModel,
+    taskId = taskId,
+    navigateUp = navigateUp,
+    modifier = modifier,
+    onSkillClicked = onSkillClicked,
+    onMcpClicked = onMcpClicked,
+    onFirstToken = onFirstToken,
+    onGenerateResponseDone = onGenerateResponseDone,
+    onResetSessionClickedOverride = onResetSessionClickedOverride,
+    composableBelowMessageList = composableBelowMessageList,
+    allowEditingSystemPrompt = allowEditingSystemPrompt,
+    curSystemPrompt = curSystemPrompt,
+    skillCount = skillCount,
+    mcpCount = mcpCount,
+    mcpToolsCount = mcpToolsCount,
+    onSystemPromptChanged = onSystemPromptChanged,
+    emptyStateComposable = emptyStateComposable,
+    sendMessageTrigger = sendMessageTrigger,
+    showImagePicker = showImagePicker,
+    showAudioPicker = showAudioPicker,
+    showTextFilePicker = showTextFilePicker,
+    getActiveSkills = getActiveSkills,
+    initialSessionId = initialSessionId,
+  )
+}
+
+@Composable
+fun LlmAskImageScreen(
+  modelManagerViewModel: ModelManagerViewModel,
+  navigateUp: () -> Unit,
+  modifier: Modifier = Modifier,
+  viewModel: LlmAskImageViewModel = hiltViewModel(),
+  allowEditingSystemPrompt: Boolean = false,
+  curSystemPrompt: String = "",
+  onSystemPromptChanged: (String) -> Unit = {},
+  initialSessionId: String? = null,
+) {
+  val sendTriggerState = remember { mutableStateOf<SendMessageTrigger?>(null) }
+  val starters = remember {
+    listOf(
+      com.tress.app.ui.common.chat.BentoStarterItem("What's in this?", "Describe what you see in detail."),
+      com.tress.app.ui.common.chat.BentoStarterItem("Extract text", "Read and extract all visible text."),
+      com.tress.app.ui.common.chat.BentoStarterItem("Summarize", "Summarize the key points from this image."),
+    )
+  }
+  ChatViewWrapper(
+    viewModel = viewModel,
+    modelManagerViewModel = modelManagerViewModel,
+    taskId = BuiltInTaskId.LLM_ASK_IMAGE,
+    navigateUp = navigateUp,
+    modifier = modifier,
+    allowEditingSystemPrompt = allowEditingSystemPrompt,
+    curSystemPrompt = curSystemPrompt,
+    onSystemPromptChanged = onSystemPromptChanged,
+    showImagePicker = true,
+    showAudioPicker = false,
+    sendMessageTrigger = sendTriggerState.value,
+    initialSessionId = initialSessionId,
+    emptyStateComposable = { model ->
+      val initStatus by model.initStatusFlow.collectAsState()
+      val uiState by viewModel.uiState.collectAsState()
+      val ready = initStatus is Model.InitializationStatus.Initialized && !uiState.isResettingSession
+      com.tress.app.ui.common.chat.BentoChatEmptyState(
+        model = model,
+        statusLabel = if (ready) "Ready" else "Loading",
+        startersTitle = "Ask Image",
+        starters = starters,
+        startersEnabled = ready,
+        startersTone = com.tress.app.core.design.theme.Tone.Sky,
+        capabilityTags = listOf("${model.maxImageCount} img"),
+        onStarterClick = { starter ->
+          sendTriggerState.value =
+            SendMessageTrigger(
+              model = model,
+              messages = listOf(ChatMessageText(content = starter.prompt, side = ChatSide.USER)),
+            )
+        },
+      )
+    },
+  )
+}
+
+@Composable
+fun LlmAskAudioScreen(
+  modelManagerViewModel: ModelManagerViewModel,
+  navigateUp: () -> Unit,
+  modifier: Modifier = Modifier,
+  viewModel: LlmAskAudioViewModel = hiltViewModel(),
+  allowEditingSystemPrompt: Boolean = false,
+  curSystemPrompt: String = "",
+  onSystemPromptChanged: (String) -> Unit = {},
+  initialSessionId: String? = null,
+) {
+  val sendTriggerState = remember { mutableStateOf<SendMessageTrigger?>(null) }
+  val starters = remember {
+    listOf(
+      com.tress.app.ui.common.chat.BentoStarterItem("Transcribe", "Transcribe this audio clip accurately."),
+      com.tress.app.ui.common.chat.BentoStarterItem("Summarize", "Summarize the main points of this audio."),
+      com.tress.app.ui.common.chat.BentoStarterItem("Translate", "Translate this speech into English."),
+    )
+  }
+  ChatViewWrapper(
+    viewModel = viewModel,
+    modelManagerViewModel = modelManagerViewModel,
+    taskId = BuiltInTaskId.LLM_ASK_AUDIO,
+    navigateUp = navigateUp,
+    modifier = modifier,
+    allowEditingSystemPrompt = allowEditingSystemPrompt,
+    curSystemPrompt = curSystemPrompt,
+    onSystemPromptChanged = onSystemPromptChanged,
+    showImagePicker = false,
+    showAudioPicker = true,
+    sendMessageTrigger = sendTriggerState.value,
+    initialSessionId = initialSessionId,
+    emptyStateComposable = { model ->
+      val initStatus by model.initStatusFlow.collectAsState()
+      val uiState by viewModel.uiState.collectAsState()
+      val ready = initStatus is Model.InitializationStatus.Initialized && !uiState.isResettingSession
+      com.tress.app.ui.common.chat.BentoChatEmptyState(
+        model = model,
+        statusLabel = if (ready) "Ready" else "Loading",
+        startersTitle = "Audio Scribe",
+        starters = starters,
+        startersEnabled = ready,
+        startersTone = com.tress.app.core.design.theme.Tone.Lavender,
+        capabilityTags = listOf("30s audio"),
+        onStarterClick = { starter ->
+          sendTriggerState.value =
+            SendMessageTrigger(
+              model = model,
+              messages = listOf(ChatMessageText(content = starter.prompt, side = ChatSide.USER)),
+            )
+        },
+      )
+    },
+  )
+}
+
+@Composable
+fun ChatViewWrapper(
+  viewModel: LlmChatViewModelBase,
+  modelManagerViewModel: ModelManagerViewModel,
+  taskId: String,
+  navigateUp: () -> Unit,
+  modifier: Modifier = Modifier,
+  onSkillClicked: () -> Unit = {},
+  onMcpClicked: () -> Unit = {},
+  onFirstToken: (Model) -> Unit = {},
+  onGenerateResponseDone: (Model) -> Unit = {},
+  onResetSessionClickedOverride: ((Task, Model, List<ChatMessage>, Boolean) -> Unit)? = null,
+  composableBelowMessageList: @Composable (Model) -> Unit = {},
+  emptyStateComposable: @Composable (Model) -> Unit = {},
+  allowEditingSystemPrompt: Boolean = false,
+  curSystemPrompt: String = "",
+  onSystemPromptChanged: (String) -> Unit = {},
+  sendMessageTrigger: SendMessageTrigger? = null,
+  showImagePicker: Boolean = false,
+  showAudioPicker: Boolean = false,
+  showTextFilePicker: Boolean = false,
+  getActiveSkills: () -> List<String> = { emptyList() },
+  skillCount: Int = 0,
+  mcpCount: Int = 0,
+  mcpToolsCount: Int = 0,
+  initialSessionId: String? = null,
+) {
+  val context = LocalContext.current
+  val task = modelManagerViewModel.getTaskById(id = taskId) ?: return
+  val scope = rememberCoroutineScope()
+  var sessionRestoreJob by remember { mutableStateOf<Job?>(null) }
+
+  ChatView(
+    task = task,
+    viewModel = viewModel,
+    modelManagerViewModel = modelManagerViewModel,
+    onSendMessage = { model, messages ->
+      for (message in messages) {
+        viewModel.addMessage(model = model, message = message)
+      }
+
+      var text = ""
+      val images: MutableList<Bitmap> = mutableListOf()
+      val audioMessages: MutableList<ChatMessageAudioClip> = mutableListOf()
+      val fileMessages: MutableList<ChatMessageFile> = mutableListOf()
+      var chatMessageText: ChatMessageText? = null
+      for (message in messages) {
+        if (message is ChatMessageText) {
+          chatMessageText = message
+          text = message.content
+        } else if (message is ChatMessageImage) {
+          images.addAll(message.bitmaps)
+        } else if (message is ChatMessageAudioClip) {
+          audioMessages.add(message)
+        } else if (message is ChatMessageFile) {
+          fileMessages.add(message)
+        }
+      }
+      if (
+        (text.isNotEmpty() && chatMessageText != null) ||
+          audioMessages.isNotEmpty() ||
+          fileMessages.isNotEmpty()
+      ) {
+        if (text.isNotEmpty()) {
+          modelManagerViewModel.addTextInputHistory(text)
+        }
+        viewModel.generateResponse(
+          model = model,
+          input = text,
+          images = images,
+          audioMessages = audioMessages,
+          files = fileMessages,
+          onFirstToken = onFirstToken,
+          onDone = { onGenerateResponseDone(model) },
+          onError = { errorMessage ->
+            viewModel.handleError(
+              context = context,
+              task = task,
+              model = model,
+              errorMessage = errorMessage,
+              modelManagerViewModel = modelManagerViewModel,
+            )
+          },
+          allowThinking = task.allowCapability(ModelCapability.LLM_THINKING, model),
+        )
+
+        val activeSkills = getActiveSkills()
+        Log.d(
+          TAG,
+          "Analytics: generate_action, capability_name=${task.id}, active_skills=${activeSkills.joinToString(",")}, active_mcp_servers_count=$mcpCount, active_mcp_tools_count=$mcpToolsCount",
+        )
+        firebaseAnalytics?.logEvent(
+          GalleryEvent.GENERATE_ACTION.id,
+          Bundle().apply {
+            putString("capability_name", task.id)
+            putString("model_id", model.name)
+            putBoolean("has_image", images.isNotEmpty())
+            putInt("image_count", images.size)
+            putBoolean("has_audio", audioMessages.isNotEmpty())
+            putInt("audio_count", audioMessages.size)
+            putInt("active_skills_count", activeSkills.size)
+            putString("active_skills_list", activeSkills.joinToString(","))
+            putInt("active_mcp_servers_count", mcpCount)
+            putInt("active_mcp_tools_count", mcpToolsCount)
+          },
+        )
+      }
+    },
+    onRunAgainClicked = { model, message ->
+      if (message is ChatMessageText) {
+        viewModel.runAgain(
+          model = model,
+          message = message,
+          onError = { errorMessage ->
+            viewModel.handleError(
+              context = context,
+              task = task,
+              model = model,
+              errorMessage = errorMessage,
+              modelManagerViewModel = modelManagerViewModel,
+            )
+          },
+          allowThinking = task.allowCapability(ModelCapability.LLM_THINKING, model),
+        )
+      }
+    },
+    onBenchmarkClicked = { _, _, _, _ -> },
+    onRestoreSessionClicked = { session ->
+      sessionRestoreJob?.cancel()
+      val selectedModel = modelManagerViewModel.uiState.value.selectedModel
+      if (onResetSessionClickedOverride != null) {
+        if (viewModel.uiState.value.inProgress) {
+          viewModel.stopResponse(model = selectedModel)
+        }
+        viewModel.setIsResettingSession(true)
+        sessionRestoreJob = scope.launch {
+          try {
+            val messages = ChatMessageMapper.deserializeProtoMessages(session.messagesList)
+            ensureActive()
+            viewModel.currentSessionId = session.sessionId
+            viewModel.setRestoredMessages(model = selectedModel, messages = messages)
+            val status =
+              selectedModel.initStatusFlow.first {
+                it is Model.InitializationStatus.Initialized ||
+                  it is Model.InitializationStatus.Failed
+              }
+            ensureActive()
+            if (status is Model.InitializationStatus.Initialized) {
+              onResetSessionClickedOverride(task, selectedModel, messages, /* clearHistory= */ false)
+            }
+          } catch (e: CancellationException) {
+            throw e
+          } catch (e: Exception) {
+            Log.e(TAG, "Failed to restore session: ${e.message}", e)
+          } finally {
+            if (coroutineContext.isActive) {
+              viewModel.setIsResettingSession(false)
+            }
+          }
+        }
+      } else {
+        viewModel.restoreSession(
+          session = session,
+          task = task,
+          model = selectedModel,
+          systemInstruction = curSystemPrompt,
+          supportImage = showImagePicker,
+          supportAudio = showAudioPicker,
+        )
+      }
+    },
+    onNewChatClicked = {
+      sessionRestoreJob?.cancel()
+      val selectedModel = modelManagerViewModel.uiState.value.selectedModel
+      if (onResetSessionClickedOverride != null) {
+        viewModel.stopResponse(model = selectedModel)
+        viewModel.setIsResettingSession(false)
+        viewModel.currentSessionId = generateSessionId()
+        viewModel.clearAllMessages(model = selectedModel)
+        onResetSessionClickedOverride(task, selectedModel, emptyList(), /* clearHistory= */ true)
+      } else {
+        viewModel.startNewSession(
+          task = task,
+          model = selectedModel,
+          systemInstruction = curSystemPrompt,
+          supportImage = showImagePicker,
+          supportAudio = showAudioPicker,
+        )
+      }
+    },
+    showStopButtonInInputWhenInProgress = true,
+    onStopButtonClicked = { model -> viewModel.stopResponse(model = model) },
+    onSkillClicked = onSkillClicked,
+    onMcpClicked = onMcpClicked,
+    navigateUp = navigateUp,
+    skillCount = skillCount,
+    mcpCount = mcpCount,
+    modifier = modifier,
+    composableBelowMessageList = composableBelowMessageList,
+    showImagePicker = showImagePicker,
+    emptyStateComposable = emptyStateComposable,
+    allowEditingSystemPrompt = allowEditingSystemPrompt,
+    curSystemPrompt = curSystemPrompt,
+    onSystemPromptChanged = onSystemPromptChanged,
+    sendMessageTrigger = sendMessageTrigger,
+    showAudioPicker = showAudioPicker,
+    showTextFilePicker = showTextFilePicker,
+    initialSessionId = initialSessionId,
+  )
+}

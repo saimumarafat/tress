@@ -1,0 +1,600 @@
+/*
+ * Copyright 2025 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.tress.app.ui.modelmanager
+
+import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
+import android.util.Log
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Error
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.SnapshotStateMap
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import com.tress.app.R
+import com.tress.app.core.design.components.GlassDialog
+import com.tress.app.core.design.components.GlassPill
+import com.tress.app.core.design.theme.Candy
+import com.tress.app.core.design.theme.glassColors
+import com.tress.app.core.design.typography.GalleryType
+import com.tress.app.common.getModelStorageDir
+import com.tress.app.common.isPixel10
+import com.tress.app.common.openSafeInputStream
+import com.tress.app.data.Accelerator
+import com.tress.app.data.Config
+import com.tress.app.data.ConfigKey
+import com.tress.app.data.ConfigKeys
+import com.tress.app.data.IMPORTS_DIR
+import com.tress.app.data.ModelUtils
+import com.tress.app.huggingface.HfUrlInfo
+import com.tress.app.huggingface.HuggingFaceApiClient
+import com.tress.app.huggingface.extractHfUrlInfo
+import com.tress.app.proto.ImportedModel
+import com.tress.app.proto.importedModel
+import com.tress.app.ui.common.ConfigEditorsPanel
+import com.tress.app.ui.common.ensureValidFileName
+import com.tress.app.ui.common.humanReadableSize
+import com.tress.app.ui.common.isHttpOrHttps
+import java.io.File
+import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+private const val TAG = "AGModelImportDialog"
+
+private val SUPPORTED_ACCELERATORS: List<Accelerator> =
+  if (isPixel10()) {
+    val accelerators = mutableListOf(Accelerator.CPU, Accelerator.NPU)
+    accelerators.toList()
+  } else {
+    listOf(Accelerator.CPU, Accelerator.GPU, Accelerator.NPU)
+  }
+
+@Composable
+fun ModelImportDialog(
+  uri: Uri,
+  huggingFaceApiClient: HuggingFaceApiClient,
+  onDismiss: () -> Unit,
+  onDone: (ImportedModel) -> Unit,
+  defaultValues: Map<ConfigKey, Any> = emptyMap(),
+  accessToken: String? = null,
+  accessTokenProvider: suspend () -> String? = { accessToken },
+  existingModelNames: Set<String> = emptySet(),
+  existingDisplayNames: Set<String> = emptySet(),
+  existingImportedModels: List<ImportedModel> = emptyList(),
+  ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+) {
+  val context = LocalContext.current
+  val defaultFallbackDisplayName = stringResource(R.string.model_import_default_display_name)
+  val info = remember(uri) { getFileSizeAndDisplayNameFromUri(context = context, uri = uri) }
+  var fileSize by remember(uri) { mutableLongStateOf(info.first) }
+  val rawFileName = remember(info) { ensureValidFileName(info.second) }
+  val downloadUrl = remember(uri) { getDownloadUrl(uri) }
+  val existingMatch =
+    remember(uri, downloadUrl, rawFileName, existingImportedModels) {
+      if (isHttpOrHttps(uri)) {
+        val canonical = HfUrlInfo.canonicalizeModelUrl(downloadUrl)
+        if (canonical.isNotEmpty()) {
+          existingImportedModels.firstOrNull { HfUrlInfo.canonicalizeModelUrl(it.url) == canonical }
+        } else {
+          null
+        }
+      } else if (rawFileName.isNotEmpty()) {
+        existingImportedModels.firstOrNull {
+          it.url.isEmpty() && it.fileName.equals(rawFileName, ignoreCase = true)
+        }
+      } else {
+        null
+      }
+    }
+  val fileName =
+    remember(uri, rawFileName, existingModelNames, existingMatch) {
+      existingMatch?.fileName
+        ?: ModelUtils.deriveUniqueImportedFileName(
+          rawUriOrUrl = if (isHttpOrHttps(uri)) downloadUrl else "",
+          fallbackFileName = rawFileName,
+          existingNames = existingModelNames,
+        )
+    }
+  val defaultDisplayName =
+    remember(uri, rawFileName, existingDisplayNames, existingMatch, defaultFallbackDisplayName) {
+      existingMatch?.displayName?.takeIf { it.isNotBlank() }
+        ?: ModelUtils.deriveDefaultImportedDisplayName(
+          rawUriOrUrl = if (isHttpOrHttps(uri)) downloadUrl else "",
+          fallbackFileName = info.second.ifEmpty { rawFileName },
+          existingDisplayNames =
+            if (existingMatch != null) {
+              existingDisplayNames -
+                setOf(existingMatch.displayName.ifEmpty { existingMatch.fileName })
+            } else {
+              existingDisplayNames
+            },
+          defaultFallbackName = defaultFallbackDisplayName,
+        )
+    }
+  val importConfigs =
+    remember(uri) {
+      Config.createLlmImportConfigs(
+        accelerators = SUPPORTED_ACCELERATORS,
+        isForTestOnly = ModelUtils.isImportedUrlForTestOnly(uri.toString()),
+      )
+    }
+
+  // Indicates that the file size is still being fetched and we should disable the import button
+  // until it's done.
+  var isFetchingSize by remember { mutableStateOf(isHttpOrHttps(uri)) }
+
+  LaunchedEffect(uri) {
+    if (isHttpOrHttps(uri)) {
+      isFetchingSize = true
+      try {
+        val resolvedToken = accessToken ?: withContext(ioDispatcher) { accessTokenProvider() }
+        val size =
+          fetchFileSize(
+            urlStr = downloadUrl,
+            hfApiClient = huggingFaceApiClient,
+            huggingFaceAccessToken = resolvedToken,
+            ioDispatcher = ioDispatcher,
+          )
+        if (size > 0L) {
+          fileSize = size
+        }
+      } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        Log.e(TAG, "Error fetching file size for $uri", e)
+      } finally {
+        isFetchingSize = false
+      }
+    }
+  }
+
+  val initialValues: Map<String, Any> =
+    remember(uri, defaultDisplayName) {
+      mutableMapOf<String, Any>().apply {
+        for (config in importConfigs) {
+          put(config.key.label, config.defaultValue)
+        }
+        put(ConfigKeys.NAME.label, defaultDisplayName)
+        put(ConfigKeys.MODEL_TYPE.label, "LLM")
+
+        for ((key, value) in defaultValues) {
+          put(key.label, value)
+        }
+      }
+    }
+  val values: SnapshotStateMap<String, Any> =
+    remember(uri, initialValues) {
+      mutableStateMapOf<String, Any>().apply { putAll(initialValues) }
+    }
+  val editedDisplayName = (values[ConfigKeys.NAME.label] as? String)?.trim().orEmpty()
+  val interactionSource = remember { MutableInteractionSource() }
+
+  val palette = glassColors
+  val focusManager = LocalFocusManager.current
+
+  GlassDialog(
+    onDismiss = onDismiss,
+    title = stringResource(R.string.import_model),
+  ) {
+    Column(
+      modifier =
+        Modifier.fillMaxWidth()
+          .clickable(
+            interactionSource = interactionSource,
+            indication = null,
+          ) {
+            focusManager.clearFocus()
+          },
+      verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+      Column(
+        modifier = Modifier.verticalScroll(rememberScrollState()).weight(1f, fill = false),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+      ) {
+        // Default configs for users to set.
+        ConfigEditorsPanel(configs = importConfigs, values = values)
+      }
+
+      // Button row.
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        GlassPill(
+          onClick = { onDismiss() },
+          modifier = Modifier.weight(1f),
+          surface = palette.glass,
+        ) {
+          Text(
+            stringResource(R.string.cancel),
+            style = GalleryType.BodyStrong,
+            color = palette.ink,
+          )
+        }
+
+        val canImport = !isFetchingSize && editedDisplayName.isNotEmpty()
+        GlassPill(
+          enabled = canImport,
+          modifier = Modifier.weight(1f),
+          tint = Candy.Sky,
+          onClick = {
+            val importedModel = importedModel {
+              this.fileName = fileName
+              this.displayName = editedDisplayName
+              this.fileSize = fileSize
+              this.url = if (isHttpOrHttps(uri)) downloadUrl else ""
+              this.llmConfig = ModelUtils.createImportedLlmConfig(values)
+            }
+
+            onDone(importedModel)
+          },
+        ) {
+          if (isFetchingSize) {
+            Row(
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp,
+                color = Color.White,
+              )
+              Text(stringResource(R.string.import_action), style = GalleryType.BodyStrong)
+            }
+          } else {
+            Text(stringResource(R.string.import_action), style = GalleryType.BodyStrong)
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+fun ModelImportingDialog(
+  uri: Uri,
+  info: ImportedModel,
+  onDismiss: () -> Unit,
+  onError: (String) -> Unit = {},
+  onDone: (ImportedModel) -> Unit,
+) {
+  var error by remember { mutableStateOf("") }
+  val context = LocalContext.current
+  val coroutineScope = rememberCoroutineScope()
+  var progress by remember { mutableFloatStateOf(0f) }
+  val palette = glassColors
+
+  LaunchedEffect(Unit) {
+    // Import.
+    importModel(
+      context = context,
+      coroutineScope = coroutineScope,
+      fileName = info.fileName,
+      fileSize = info.fileSize,
+      uri = uri,
+      onDone = { onDone(info) },
+      onProgress = { progress = it },
+      onError = {
+        error = it
+        onError(it)
+      },
+    )
+  }
+
+  GlassDialog(
+    onDismiss = onDismiss,
+    title = stringResource(R.string.import_model),
+    dismissible = error.isNotEmpty(),
+    confirm = if (error.isNotEmpty()) stringResource(R.string.close) else null,
+    onConfirm = { onDismiss() },
+    accent = if (error.isNotEmpty()) Candy.Tomato else Candy.Sky,
+  ) {
+    if (error.isEmpty()) {
+      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+          "${info.displayName.ifEmpty { info.fileName }} (${info.fileSize.humanReadableSize()})",
+          style = GalleryType.Caption,
+          color = palette.inkSoft,
+        )
+        val animatedProgress = remember { Animatable(0f) }
+        LinearProgressIndicator(
+          progress = { animatedProgress.value },
+          modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+          color = Candy.Sky,
+          trackColor = palette.line,
+        )
+        LaunchedEffect(progress) {
+          animatedProgress.animateTo(progress, animationSpec = tween(150))
+        }
+      }
+    } else {
+      Row(
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        Icon(
+          Icons.Rounded.Error,
+          contentDescription = stringResource(R.string.cd_error),
+          tint = Candy.Tomato,
+        )
+        Text(
+          error,
+          style = GalleryType.Body,
+          color = Candy.Tomato,
+          modifier = Modifier.padding(top = 2.dp),
+        )
+      }
+    }
+  }
+}
+
+private fun importModel(
+  context: Context,
+  coroutineScope: CoroutineScope,
+  fileName: String,
+  fileSize: Long,
+  uri: Uri,
+  onDone: () -> Unit,
+  onProgress: (Float) -> Unit,
+  onError: (String) -> Unit,
+) {
+  // TODO: handle error.
+  coroutineScope.launch(Dispatchers.IO) {
+    // If it's a model from the web, we don't need to copy the file over.
+    if (isHttpOrHttps(uri)) {
+      Log.d(TAG, "importing web model from $uri. File name: $fileName. File size: $fileSize")
+      // Simulate a quick progress animation to show the user it's being added
+      // for (i in 1..10) {
+      //   kotlinx.coroutines.delay(50)
+      //   onProgress(i.toFloat() / 10f)
+      // }
+      Log.d(TAG, "import done for web model")
+      withContext(Dispatchers.Main) { onDone() }
+      return@launch
+    }
+
+    // Get the last component of the uri path as the imported file name.
+    val decodedUri = URLDecoder.decode(uri.toString(), StandardCharsets.UTF_8.name())
+    Log.d(TAG, "importing model from $decodedUri. File name: $fileName. File size: $fileSize")
+
+    val modelsDir = getModelStorageDir(context)
+
+    // Create <models_dir>/imports if not exist.
+    val importsDir = File(modelsDir, IMPORTS_DIR)
+    if (!importsDir.exists()) {
+      importsDir.mkdirs()
+    }
+
+    // Import by copying the file over.
+    val inputStream = openSafeInputStream(context, uri)
+    if (inputStream == null) {
+      Log.e(TAG, "Failed to open input stream for $uri")
+      withContext(Dispatchers.Main) { onError(context.getString(R.string.failed_to_import)) }
+      return@launch
+    }
+
+    val outputFile = File(modelsDir, "$IMPORTS_DIR/$fileName")
+    try {
+      FileOutputStream(outputFile).use { outputStream ->
+        inputStream.use { stream ->
+          val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+          var bytesRead: Int
+          var lastSetProgressTs: Long = 0
+          var importedBytes = 0L
+          while (stream.read(buffer).also { bytesRead = it } != -1) {
+            ensureActive()
+            outputStream.write(buffer, 0, bytesRead)
+            importedBytes += bytesRead
+
+            // Report progress every 200 ms.
+            val curTs = System.currentTimeMillis()
+            if (curTs - lastSetProgressTs > 200) {
+              Log.d(TAG, "importing progress: $importedBytes, $fileSize")
+              lastSetProgressTs = curTs
+              if (fileSize != 0L) {
+                onProgress(importedBytes.toFloat() / fileSize.toFloat())
+              }
+            }
+          }
+        }
+      }
+    } catch (e: CancellationException) {
+      outputFile.delete()
+      throw e
+    } catch (e: Exception) {
+      Log.e(TAG, "Failed to import model", e)
+      outputFile.delete()
+      withContext(Dispatchers.Main) {
+        onError(e.message ?: context.getString(R.string.failed_to_import))
+      }
+      return@launch
+    }
+    Log.d(TAG, "import done")
+    withContext(Dispatchers.Main) {
+      onProgress(1f)
+      onDone()
+    }
+  }
+}
+
+private fun getFileSizeAndDisplayNameFromUri(context: Context, uri: Uri): Pair<Long, String> {
+  if (isHttpOrHttps(uri)) {
+    return Pair(0L, uri.lastPathSegment ?: "")
+  }
+  val contentResolver = context.contentResolver
+  var fileSize = 0L
+  var displayName = ""
+
+  try {
+    contentResolver
+      .query(uri, arrayOf(OpenableColumns.SIZE, OpenableColumns.DISPLAY_NAME), null, null, null)
+      ?.use { cursor ->
+        if (cursor.moveToFirst()) {
+          val sizeIndex = cursor.getColumnIndexOrThrow(OpenableColumns.SIZE)
+          fileSize = cursor.getLong(sizeIndex)
+
+          val nameIndex = cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME)
+          displayName = cursor.getString(nameIndex)
+        }
+      }
+  } catch (e: Exception) {
+    e.printStackTrace()
+    return Pair(0L, "")
+  }
+
+  return Pair(fileSize, displayName)
+}
+
+// Get the download url for the model.
+private fun getDownloadUrl(uri: Uri): String {
+  return if (uri.toString().contains("huggingface.co") && uri.toString().contains("/blob/")) {
+    uri.toString().replaceFirst("/blob/", "/resolve/")
+  } else {
+    uri.toString()
+  }
+}
+
+/**
+ * Fetches the total file size of a remote model URL without downloading the full payload.
+ *
+ * For Hugging Face URLs, queries the Hugging Face REST API via [HuggingFaceApiClient]. For
+ * non-Hugging Face HTTP URLs, probes the endpoint directly via HTTP Range GET.
+ *
+ * @param urlStr Direct remote file URL to inspect.
+ * @param huggingFaceAccessToken Optional Bearer authentication token for Hugging Face.
+ * @return Total file size in bytes, or `0L` if size could not be determined.
+ */
+private suspend fun fetchFileSize(
+  urlStr: String,
+  hfApiClient: HuggingFaceApiClient,
+  huggingFaceAccessToken: String? = null,
+  ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+): Long =
+  withContext(ioDispatcher) {
+    if (HuggingFaceApiClient.isHuggingFaceUrl(urlStr)) {
+      return@withContext fetchHuggingFaceFileSize(
+        urlStr = urlStr,
+        hfApiClient = hfApiClient,
+        huggingFaceAccessToken = huggingFaceAccessToken,
+      )
+    }
+    return@withContext fetchHttpFileSize(urlStr)
+  }
+
+/** Fetches the file size using the Hugging Face API client. */
+private suspend fun fetchHuggingFaceFileSize(
+  urlStr: String,
+  hfApiClient: HuggingFaceApiClient,
+  huggingFaceAccessToken: String? = null,
+): Long {
+  val urlInfo = extractHfUrlInfo(urlStr)
+  val modelId = urlInfo.modelId
+  val fileName = urlInfo.fileName
+  if (modelId != null && fileName != null) {
+    try {
+      val size =
+        hfApiClient.getModelFileSize(modelId, fileName, accessToken = huggingFaceAccessToken)
+      if (size != null && size > 0L) {
+        return size
+      }
+    } catch (e: Exception) {
+      if (e is CancellationException) throw e
+      Log.w(TAG, "HuggingFaceApiClient lookup failed for $urlStr", e)
+    }
+  }
+  return 0L
+}
+
+/** Fetches the file size from a generic, non-Hugging-Face HTTP URL via Range GET. */
+private suspend fun fetchHttpFileSize(urlStr: String): Long {
+  val url = runCatching { URL(urlStr) }.getOrNull() ?: return 0L
+  val connection =
+    runCatching { url.openConnection() as HttpURLConnection }.getOrNull() ?: return 0L
+  connection.requestMethod = "GET"
+
+  // Request only the first 1 byte (bytes=0-0) to inspect file headers without downloading the
+  // entire payload.
+  connection.setRequestProperty("Range", "bytes=0-0")
+
+  try {
+    connection.connect()
+
+    val isResponseOk = connection.responseCode in 200..299
+    if (isResponseOk) {
+      // HTTP 206 Partial Content returns "Content-Range: bytes 0-0/<total_bytes>".
+      val contentRange = connection.getHeaderField("Content-Range")
+      if (contentRange != null) {
+        val totalFromRange = contentRange.substringAfter("/").trim().toLongOrNull()
+        if (totalFromRange != null && totalFromRange > 0L) {
+          return totalFromRange
+        }
+      }
+      // Fallback to Content-Length if the server returned HTTP 200 OK without byte ranges.
+      val contentLength = connection.contentLengthLong
+      if (contentLength > 0L) {
+        return contentLength
+      }
+    }
+  } catch (e: Exception) {
+    if (e is CancellationException) throw e
+    Log.w(TAG, "HTTP probe failed for $urlStr", e)
+  } finally {
+    connection.disconnect()
+  }
+  return 0L
+}

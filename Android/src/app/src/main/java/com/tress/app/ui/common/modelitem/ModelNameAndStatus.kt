@@ -1,0 +1,375 @@
+/*
+ * Copyright 2025 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.tress.app.ui.common.modelitem
+
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import com.tress.app.core.design.components.GlassDialog
+import com.tress.app.core.design.theme.Candy
+import com.tress.app.core.design.theme.glassColors
+import com.tress.app.core.design.typography.GalleryType
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.tress.app.R
+import com.tress.app.data.MODEL_INFO_ICON_SIZE
+import com.tress.app.data.Model
+import com.tress.app.data.ModelDownloadStatus
+import com.tress.app.data.ModelDownloadStatusType
+import com.tress.app.data.ModelType
+import com.tress.app.data.Task
+import com.tress.app.ui.common.ClickableLink
+import com.tress.app.ui.common.humanReadableSize
+import com.tress.app.ui.theme.customColors
+import com.tress.app.ui.theme.labelSmallNarrow
+
+/**
+ * Composable function to display the model name and its download status information.
+ *
+ * This function renders the model's name and its current download status, including:
+ * - Model name.
+ * - Failure message (if download failed).
+ * - Downloaded size, and why it paused, for a paused download.
+ * - "Unzipping..." status for unzipping processes.
+ * - Model size for successful downloads.
+ */
+@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+fun ModelNameAndStatus(
+  model: Model,
+  task: Task?,
+  downloadStatus: ModelDownloadStatus?,
+  isExpanded: Boolean,
+  modifier: Modifier = Modifier,
+  showModelSizeAndDownloadProgressLabel: Boolean = true,
+  showBestOverallBadge: Boolean = false,
+  showLearnMore: Boolean = false,
+  collapsedSubtitle: String? = null,
+  statusContent: (@Composable () -> Unit)? = null,
+  titleColor: Color = Color.Unspecified,
+) {
+  var showUpdateDialog by remember { mutableStateOf(false) }
+
+  Column(modifier = modifier) {
+    if (showBestOverallBadge) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier.padding(bottom = 4.dp),
+      ) {
+        Icon(
+          Icons.Filled.Star,
+          tint = Color(0xFFFCC934),
+          contentDescription = null,
+          modifier = Modifier.size(16.dp),
+        )
+        Text(
+          stringResource(R.string.best_overall),
+          style = GalleryType.Caption,
+          color = glassColors.inkSoft,
+        )
+      }
+    }
+
+    // Show "Update available" info message label if the model is updatable.
+    // Tap to show the detailed update info in a dialog.
+    if (downloadStatus?.isUpdatable == true) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier =
+          Modifier.padding(bottom = 10.dp)
+            .then(
+              if (model.downloadInfo.updateInfo.isNotEmpty()) {
+                Modifier.clickable(role = Role.Button) { showUpdateDialog = true }
+              } else {
+                Modifier
+              }
+            ),
+      ) {
+        Icon(
+          Icons.Filled.Info,
+          tint = MaterialTheme.colorScheme.primary,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp),
+        )
+        Text(
+          stringResource(R.string.update_available),
+          style = MaterialTheme.typography.labelMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+    }
+
+    if (showUpdateDialog) {
+      val palette = glassColors
+      GlassDialog(
+        onDismiss = { showUpdateDialog = false },
+        title = stringResource(R.string.about_this_update),
+        confirm = stringResource(android.R.string.ok),
+        onConfirm = { showUpdateDialog = false },
+        accent = Candy.Sky,
+      ) {
+        Text(
+          text = model.downloadInfo.updateInfo,
+          style = GalleryType.Body,
+          color = palette.inkSoft,
+        )
+      }
+    }
+
+    // Model name and optional ASR/TTS modality badge.
+    val resolvedTitleColor =
+      if (titleColor != Color.Unspecified) titleColor else glassColors.ink
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      Text(
+        model.displayName.ifEmpty { model.name },
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        style = GalleryType.CardTitle.copy(fontSize = 15.5.sp, lineHeight = 19.sp),
+        color = resolvedTitleColor,
+        modifier = Modifier.weight(1f, fill = false),
+      )
+      when (model.modelType) {
+        ModelType.ASR -> {
+          Box(
+            modifier =
+              Modifier.background(
+                  color = MaterialTheme.colorScheme.secondaryContainer,
+                  shape = RoundedCornerShape(6.dp),
+                )
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+          ) {
+            Text(
+              text = stringResource(R.string.model_tag_asr),
+              style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+              color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+          }
+        }
+        ModelType.TTS -> {
+          Box(
+            modifier =
+              Modifier.background(
+                  color = MaterialTheme.colorScheme.tertiaryContainer,
+                  shape = RoundedCornerShape(6.dp),
+                )
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+          ) {
+            Text(
+              text = stringResource(R.string.model_tag_tts),
+              style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+              color = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
+          }
+        }
+        else -> {}
+      }
+    }
+
+    // Status icon + size + download progress details, unless the caller provides its own status.
+    if (statusContent != null) {
+      Box(modifier = Modifier.padding(top = 4.dp)) { statusContent() }
+    }
+    val showStatusForNonDownloadable =
+      downloadStatus?.status == ModelDownloadStatusType.UNAVAILABLE ||
+        downloadStatus?.status == ModelDownloadStatusType.FAILED ||
+        downloadStatus?.status == ModelDownloadStatusType.IN_PROGRESS
+    if (
+      statusContent == null &&
+        !model.autoDownloadsOnStartup &&
+        showModelSizeAndDownloadProgressLabel &&
+        (model.supportsTopLevelDownload || showStatusForNonDownloadable)
+    ) {
+      ModelStatusDetails(
+        model = model,
+        task = task,
+        downloadStatus = downloadStatus,
+        isExpanded = isExpanded,
+        modifier = Modifier.padding(top = 4.dp),
+      )
+    }
+
+    // Optional collapsed subtitle only (avoid redundant inline Learn More links on every row).
+    if (!showLearnMore && !collapsedSubtitle.isNullOrEmpty()) {
+      Text(
+        text = collapsedSubtitle,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp),
+      )
+    }
+  }
+}
+
+@Composable
+fun ModelStatusDetails(
+  model: Model,
+  task: Task?,
+  downloadStatus: ModelDownloadStatus?,
+  isExpanded: Boolean,
+  modifier: Modifier = Modifier,
+) {
+  val inProgress = downloadStatus?.status == ModelDownloadStatusType.IN_PROGRESS
+  val isPartiallyDownloaded = downloadStatus?.status == ModelDownloadStatusType.PARTIALLY_DOWNLOADED
+  // A paused download that the user can resume or discard.
+  val isPaused = downloadStatus?.isPaused(model) == true
+
+  Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier) {
+    // Status icon.
+    StatusIcon(
+      task = task,
+      model = model,
+      downloadStatus = downloadStatus,
+      modifier = Modifier.padding(end = 4.dp),
+    )
+
+    // Failure message.
+    if (downloadStatus != null && downloadStatus.status == ModelDownloadStatusType.FAILED) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+          downloadStatus.errorMessage.ifEmpty {
+            stringResource(R.string.model_download_failed_status)
+          },
+          color = MaterialTheme.colorScheme.error,
+          style = labelSmallNarrow,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+    }
+    // Status label
+    else {
+      var sizeLabel = model.downloadInfo.totalBytes.humanReadableSize()
+      if (model.downloadInfo.localRelativeDirPathOverride.isNotEmpty()) {
+        sizeLabel = "{ext_files_dir}/${model.downloadInfo.localRelativeDirPathOverride}"
+      }
+
+      // Populate the status label.
+      if (downloadStatus != null) {
+        when {
+          // For a paused model, show {receivedSize} of {totalSize} downloaded · {reason}
+          isPaused -> {
+            sizeLabel = pausedDownloadStatusLabel(model = model, downloadStatus = downloadStatus)
+          }
+          // For in-progress model, show {receivedSize} / {totalSize} - {rate} - {remainingTime}
+          inProgress || isPartiallyDownloaded -> {
+            if (!model.downloadsViaRepository && downloadStatus.totalBytes == 0L) {
+              sizeLabel = stringResource(R.string.cd_downloading_icon)
+            } else {
+              var totalSize = downloadStatus.totalBytes
+              if (totalSize == 0L) {
+                totalSize = model.downloadInfo.totalBytes
+              }
+              sizeLabel =
+                "${downloadStatus.receivedBytes.humanReadableSize(extraDecimalForGbAndAbove = true)} of ${totalSize.humanReadableSize()}"
+              if (downloadStatus.bytesPerSecond > 0) {
+                sizeLabel = "$sizeLabel · ${downloadStatus.bytesPerSecond.humanReadableSize()} / s"
+                // if (downloadStatus.remainingMs >= 0) {
+                //   sizeLabel =
+                //     "$sizeLabel\n${downloadStatus.remainingMs.formatToHourMinSecond()} left"
+                // }
+              }
+            }
+          }
+          // Status for unzipping.
+          downloadStatus.status == ModelDownloadStatusType.UNZIPPING -> {
+            sizeLabel = "Unzipping..."
+          }
+          // Status for unavailable model.
+          downloadStatus.status == ModelDownloadStatusType.UNAVAILABLE -> {
+            sizeLabel = stringResource(R.string.model_unavailable_status)
+          }
+        }
+      }
+
+      Column(
+        horizontalAlignment = if (isExpanded) Alignment.CenterHorizontally else Alignment.Start
+      ) {
+        for ((index, line) in sizeLabel.split("\n").withIndex()) {
+          Text(
+            line,
+            color = glassColors.inkSoft,
+            // The reason a download paused can make its label long.
+            maxLines = if (isPaused) 2 else 1,
+            style =
+              GalleryType.Caption.copy(
+                fontWeight = FontWeight.SemiBold,
+                // This stops numbers from "jumping around" when being updated.
+                fontFeatureSettings = "tnum"
+              ),
+            overflow = if (isPaused) TextOverflow.Ellipsis else TextOverflow.Visible,
+            modifier = Modifier.offset(y = if (index == 0) 0.dp else (-1).dp),
+          )
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Returns the status label of [model]'s paused download: how much of it is downloaded, followed by
+ * why it paused when that's known, e.g. "1.20 GB of 3.66 GB downloaded · Connection lost".
+ */
+@Composable
+fun pausedDownloadStatusLabel(model: Model, downloadStatus: ModelDownloadStatus): String {
+  val totalBytes = downloadStatus.totalBytes.takeIf { it > 0L } ?: model.downloadInfo.totalBytes
+  val receivedSize =
+    downloadStatus.receivedBytes.humanReadableSize(extraDecimalForGbAndAbove = true)
+  val totalSize = totalBytes.humanReadableSize()
+  return if (downloadStatus.errorMessage.isEmpty()) {
+    stringResource(R.string.model_download_paused_status, receivedSize, totalSize)
+  } else {
+    stringResource(
+      R.string.model_download_paused_status_with_reason,
+      receivedSize,
+      totalSize,
+      downloadStatus.errorMessage,
+    )
+  }
+}
