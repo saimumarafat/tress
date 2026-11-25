@@ -6,8 +6,7 @@
 
 <p align="center">
   <strong>Private, offline-first on-device AI workspace for Android</strong><br/>
-  Powered by LiteRT-LM, Gemma, Qwen, DeepSeek &amp; modular Agent Skills — wrapped in a minimal, fast Bento &amp; Liquid Glass UI.
-</p>
+  Powered by LiteRT-LM, Gemma, Qwen, DeepSeek &amp; modular Agent Skills</p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-18181b.svg" alt="License" /></a>
