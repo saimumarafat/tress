@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 108 108">
+  <defs>
+    <linearGradient id="tressGrad" x1="25" y1="40" x2="79" y2="71" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0044E5" />
+      <stop offset="55%" stop-color="#0A84FF" />
+      <stop offset="100%" stop-color="#38BDF8" />
+    </linearGradient>
+  </defs>
+  <path d="M27.96,42.66 C35.10,31.32 52.32,32.16 78.78,30.90 M55.26,32.58 C50.47,47.28 44.93,64.08 48.12,73.15 C50.64,79.03 61.14,77.94 70.97,67.27"
+        fill="none"
+        stroke="url(#tressGrad)"
+        stroke-width="11.1"
+        stroke-linecap="round"
+        stroke-linejoin="round" />
+</svg>

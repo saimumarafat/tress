@@ -1,0 +1,23 @@
+# OS & Editor
+.DS_Store
+*.iml
+.idea/
+.vscode/
+
+# Gradle & Build Outputs
+.gradle/
+**/build/
+**/captures/
+**/.externalNativeBuild/
+**/.cxx/
+local.properties
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Keystores & Local Secrets
+*.jks
+*.keystore
+keystore.properties
+google-services.json

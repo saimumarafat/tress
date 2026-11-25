@@ -1,0 +1,184 @@
+/*
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+/*
+ * Adaptive backdrop luminance sampling adapted from Artefact
+ * (https://github.com/Chethan616/Artefact) and AndroidLiquidGlass (Kyant0, Apache-2.0).
+ */
+
+package com.google.ai.edge.gallery.core.design.glass
+
+import android.graphics.Bitmap
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.util.lerp
+import com.google.ai.edge.gallery.core.design.theme.glassColors
+import com.kyant.backdrop.BackdropEffectScope
+import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.colorControls
+import com.kyant.backdrop.effects.lens
+import kotlin.math.abs
+import kotlin.math.sign
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+
+@Stable
+class GlassLuminance internal constructor(initial: Float, internal val layer: GraphicsLayer) {
+  private val anim = Animatable(initial)
+  @Volatile private var recorded = false
+  @Volatile private var dirty = true
+
+  val value: Float get() = anim.value
+  var onLight by mutableStateOf(initial > 0.5f)
+    private set
+  var measured by mutableStateOf(true)
+    private set
+
+  internal val recorder: DrawScope.(DrawScope.() -> Unit) -> Unit = { drawBackdrop ->
+    drawBackdrop()
+    if (!recorded || dirty) {
+      val w = (size.width / DOWN).toInt().coerceAtLeast(1)
+      val h = (size.height / DOWN).toInt().coerceAtLeast(1)
+      layer.record(IntSize(w, h)) {
+        scale(1f / DOWN, 1f / DOWN, pivot = Offset.Zero) { drawBackdrop() }
+      }
+      recorded = true
+      dirty = false
+    }
+  }
+
+  internal suspend fun run() {
+    val px = IntArray(SAMPLES * SAMPLES)
+    while (true) {
+      if (!recorded) {
+        delay(32)
+        continue
+      }
+      val lum = withContext(Dispatchers.Default) {
+        runCatching {
+          val full = layer.toImageBitmap().asAndroidBitmap()
+          val sw = full.width.coerceAtLeast(1)
+          val sh = full.height.coerceAtLeast(1)
+          var sum = 0.0
+          var n = 0
+          for (sy in 0 until SAMPLES) {
+            val py = ((sy + 0.5f) / SAMPLES * sh).toInt().coerceIn(0, sh - 1)
+            for (sx in 0 until SAMPLES) {
+              val pxCoord = ((sx + 0.5f) / SAMPLES * sw).toInt().coerceIn(0, sw - 1)
+              val c = full.getPixel(pxCoord, py)
+              if ((c ushr 24) < 8) continue
+              sum += (0.2126 * ((c shr 16) and 0xFF) + 0.7152 * ((c shr 8) and 0xFF) + 0.0722 * (c and 0xFF)) / 255.0
+              n++
+            }
+          }
+          if (n == 0) null else (sum / n).toFloat()
+        }.getOrNull()
+      }
+      if (lum != null) {
+        onLight = when {
+          lum > 0.56f -> true
+          lum < 0.44f -> false
+          else -> onLight
+        }
+        if (abs(lum - anim.targetValue) > 0.08f) {
+          anim.animateTo(lum, tween(380))
+        }
+      }
+      delay(SAMPLE_INTERVAL_MS)
+      dirty = true
+    }
+  }
+
+  private companion object {
+    const val DOWN = 8f
+    const val SAMPLES = 5
+    const val SAMPLE_INTERVAL_MS = 600L
+  }
+}
+
+@Composable
+fun rememberGlassLuminance(enabled: Boolean = GlassSettings.adaptive): GlassLuminance? {
+  if (!enabled || glassColors.clean || GlassSettings.isLiteTier) return null
+  val layer = rememberGraphicsLayer()
+  val dark = glassColors.dark
+  val screen = LocalScreenInk.current
+  val state = remember(layer) {
+    GlassLuminance(screen?.frame?.average() ?: if (dark) 0.14f else 0.86f, layer)
+  }
+  LaunchedEffect(state) { state.run() }
+  return state
+}
+
+val LocalMenuInk = compositionLocalOf { Color.Unspecified }
+
+@Composable
+fun adaptiveInk(luminance: GlassLuminance?, fallback: Color): Color {
+  if (luminance == null) return fallback
+  val target = if (luminance.onLight) InkOnLight else Color.White
+  val ink by animateColorAsState(target, tween(220), label = "adaptiveGlassInk")
+  return ink
+}
+
+private fun signed(luminance: Float): Float =
+  (luminance * 2f - 1f).let { sign(it) * it * it }
+
+fun BackdropEffectScope.adaptiveGlassEffects(
+  style: GlassStyle,
+  luminance: Float,
+  blurPx: Float,
+  refractionHeightPx: Float,
+  refractionAmountPx: Float,
+) {
+  val l = signed(luminance.coerceIn(0f, 1f))
+  colorControls(
+    brightness = (if (l > 0f) lerp(0.08f, 0.38f, l) else lerp(0.08f, -0.22f, -l)) + style.brightness,
+    contrast = if (l > 0f) lerp(1f, 0.30f, l) else 1f,
+    saturation = style.saturation,
+  )
+  blur(blurPx * style.blur * (if (l > 0f) lerp(1f, 1.45f, l) else lerp(1f, 0.65f, -l)))
+  lens(
+    refractionHeightPx * style.refractionHeight,
+    refractionAmountPx * style.refractionAmount,
+    depthEffect = style.depthEffect,
+    chromaticAberration = style.chromaticAberration,
+  )
+}
+
+val GlassStyle.adaptiveBase: GlassStyle
+  get() = copy(blur = 1f, saturation = 1.45f, brightness = 0f, tint = 1f)
+
+fun adaptiveWash(luminance: Float): Color {
+  val l = signed(luminance.coerceIn(0f, 1f))
+  return if (l >= 0f) Color.White.copy(alpha = lerp(0.10f, 0.28f, l))
+  else Color.Black.copy(alpha = lerp(0.10f, 0.32f, -l))
+}

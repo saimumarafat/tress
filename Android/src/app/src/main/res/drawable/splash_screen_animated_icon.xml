@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt">
+  <aapt:attr name="android:drawable">
+    <vector
+        android:width="432dp"
+        android:height="432dp"
+        android:viewportWidth="432"
+        android:viewportHeight="432">
+      <group
+          android:name="tress_root"
+          android:pivotX="216"
+          android:pivotY="216"
+          android:scaleX="0.83"
+          android:scaleY="0.83">
+        <path
+            android:name="tress_crossbar"
+            android:pathData="M116,168 C146,120 208,124 318,118"
+            android:strokeWidth="44"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:trimPathEnd="0">
+          <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="116"
+                android:startY="168"
+                android:endX="318"
+                android:endY="118"
+                android:type="linear">
+              <item android:offset="0" android:color="#FF0044E5" />
+              <item android:offset="0.6" android:color="#FF0A84FF" />
+              <item android:offset="1" android:color="#FF38BDF8" />
+            </gradient>
+          </aapt:attr>
+        </path>
+        <path
+            android:name="tress_stem"
+            android:pathData="M222,126 C202,184 180,254 192,292 C202,318 244,314 286,272"
+            android:strokeWidth="44"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:trimPathEnd="0">
+          <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="222"
+                android:startY="126"
+                android:endX="286"
+                android:endY="292"
+                android:type="linear">
+              <item android:offset="0" android:color="#FF0055EE" />
+              <item android:offset="0.55" android:color="#FF0A84FF" />
+              <item android:offset="1" android:color="#FF38BDF8" />
+            </gradient>
+          </aapt:attr>
+        </path>
+      </group>
+    </vector>
+  </aapt:attr>
+
+  <target android:name="tress_crossbar">
+    <aapt:attr name="android:animation">
+      <objectAnimator
+          android:duration="160"
+          android:interpolator="@android:interpolator/fast_out_slow_in"
+          android:propertyName="trimPathEnd"
+          android:valueFrom="0"
+          android:valueTo="1"
+          android:valueType="floatType" />
+    </aapt:attr>
+  </target>
+
+  <target android:name="tress_stem">
+    <aapt:attr name="android:animation">
+      <objectAnimator
+          android:startOffset="60"
+          android:duration="180"
+          android:interpolator="@android:interpolator/fast_out_slow_in"
+          android:propertyName="trimPathEnd"
+          android:valueFrom="0"
+          android:valueTo="1"
+          android:valueType="floatType" />
+    </aapt:attr>
+  </target>
+
+  <target android:name="tress_root">
+    <aapt:attr name="android:animation">
+      <set android:ordering="together">
+        <objectAnimator
+            android:duration="240"
+            android:interpolator="@android:interpolator/fast_out_slow_in"
+            android:propertyName="scaleX"
+            android:valueFrom="0.72"
+            android:valueTo="0.83"
+            android:valueType="floatType" />
+        <objectAnimator
+            android:duration="240"
+            android:interpolator="@android:interpolator/fast_out_slow_in"
+            android:propertyName="scaleY"
+            android:valueFrom="0.72"
+            android:valueTo="0.83"
+            android:valueType="floatType" />
+      </set>
+    </aapt:attr>
+  </target>
+</animated-vector>
