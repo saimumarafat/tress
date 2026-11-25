@@ -83,10 +83,14 @@ constructor(
   private val feedbackLinks = ConcurrentHashMap<String, MutableList<SessionFeedbackLink>>()
   private val sessionConfigs = ConcurrentHashMap<String, SessionConfig>()
   private val sessionMutexes = ConcurrentHashMap<String, Mutex>()
+  private val modelMutexes = ConcurrentHashMap<String, Mutex>()
   private val activeSessionIdRef = AtomicReference<String?>(generateSessionId())
 
   private fun sessionMutex(sessionId: String): Mutex =
     sessionMutexes.getOrPut(sessionId) { Mutex() }
+
+  private fun modelMutex(modelName: String): Mutex =
+    modelMutexes.getOrPut(modelName) { Mutex() }
 
   override var activeSessionId: String?
     get() = activeSessionIdRef.get()
@@ -120,15 +124,17 @@ constructor(
         ensureModelInitialized(config.model, "createSession")
 
         try {
-          config.model.runtimeHelper.resetConversationOrThrow(
-            model = config.model,
-            supportImage = config.supportImage,
-            supportAudio = config.supportAudio,
-            systemInstruction = config.systemInstruction,
-            tools = config.tools,
-            enableConversationConstrainedDecoding = config.enableConversationConstrainedDecoding,
-            initialMessages = emptyList(),
-          )
+          modelMutex(config.model.name).withLock {
+            config.model.runtimeHelper.resetConversationOrThrow(
+              model = config.model,
+              supportImage = config.supportImage,
+              supportAudio = config.supportAudio,
+              systemInstruction = config.systemInstruction,
+              tools = config.tools,
+              enableConversationConstrainedDecoding = config.enableConversationConstrainedDecoding,
+              initialMessages = emptyList(),
+            )
+          }
         } catch (e: Exception) {
           Log.e(TAG, "Error resetting conversation for new session: ${e.message}", e)
           throw e
@@ -155,15 +161,17 @@ constructor(
         ensureModelInitialized(config.model, "loadSession")
 
         try {
-          config.model.runtimeHelper.resetConversationOrThrow(
-            model = config.model,
-            supportImage = config.supportImage,
-            supportAudio = config.supportAudio,
-            systemInstruction = config.systemInstruction,
-            tools = config.tools,
-            enableConversationConstrainedDecoding = config.enableConversationConstrainedDecoding,
-            initialMessages = litertMessages,
-          )
+          modelMutex(config.model.name).withLock {
+            config.model.runtimeHelper.resetConversationOrThrow(
+              model = config.model,
+              supportImage = config.supportImage,
+              supportAudio = config.supportAudio,
+              systemInstruction = config.systemInstruction,
+              tools = config.tools,
+              enableConversationConstrainedDecoding = config.enableConversationConstrainedDecoding,
+              initialMessages = litertMessages,
+            )
+          }
         } catch (e: Exception) {
           Log.e(TAG, "Error resetting conversation on session load: ${e.message}", e)
           throw e
@@ -189,15 +197,17 @@ constructor(
         ensureModelInitialized(config.model, "resetSession")
 
         try {
-          config.model.runtimeHelper.resetConversationOrThrow(
-            model = config.model,
-            supportImage = config.supportImage,
-            supportAudio = config.supportAudio,
-            systemInstruction = config.systemInstruction,
-            tools = config.tools,
-            enableConversationConstrainedDecoding = enableConversationConstrainedDecoding,
-            initialMessages = initialMessages,
-          )
+          modelMutex(config.model.name).withLock {
+            config.model.runtimeHelper.resetConversationOrThrow(
+              model = config.model,
+              supportImage = config.supportImage,
+              supportAudio = config.supportAudio,
+              systemInstruction = config.systemInstruction,
+              tools = config.tools,
+              enableConversationConstrainedDecoding = enableConversationConstrainedDecoding,
+              initialMessages = initialMessages,
+            )
+          }
         } catch (e: Exception) {
           Log.e(TAG, "Error resetting session: ${e.message}", e)
           throw e

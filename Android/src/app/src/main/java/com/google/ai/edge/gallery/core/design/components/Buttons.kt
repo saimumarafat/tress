@@ -429,6 +429,12 @@ fun GlassCircle(
   val inkNow = probe.color
   val around = remember { arrayOfNulls<SurroundLuminance>(1) }
   val syncMorphAnchor = { rect: Rect ->
+    at[0]?.let { prev ->
+      if (prev != rect) {
+        MorphAnchors.unregister(prev)
+        MorphAnchors.setSurround(prev, null)
+      }
+    }
     at[0] = rect
     MorphAnchors.register(rect) { CompositionLocalProvider(LocalGlassInk provides inkNow) { glyph() } }
     MorphAnchors.setTint(rect, tint)

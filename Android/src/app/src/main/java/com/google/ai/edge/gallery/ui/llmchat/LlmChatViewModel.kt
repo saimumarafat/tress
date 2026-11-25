@@ -75,6 +75,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.onEach
@@ -257,6 +258,24 @@ open class LlmChatViewModelBase(
         }
       }
 
+      // Wait for model initialization if it is still loading before running inference.
+      if (model.instance == null && model.initializing) {
+        try {
+          model.awaitInitialization()
+        } catch (e: CancellationException) {
+          throw e
+        } catch (e: Exception) {
+          Log.e(TAG, "Model initialization failed before inference: ${e.message}", e)
+          setInProgress(false)
+          setPreparing(false)
+          onError(e.message ?: "Model initialization failed.")
+          return@launch
+        }
+      }
+
+      // Persist the user's outgoing message immediately so history is never lost if interrupted.
+      persistCurrentSession(model = model, taskId = currentTaskId)
+
       // Loading.
       addMessage(model = model, message = ChatMessageLoading(accelerator = accelerator))
 
@@ -298,46 +317,103 @@ open class LlmChatViewModelBase(
       val start = System.currentTimeMillis()
 
       // Run inference.
-      runtimeExecutor.executeStream(context = executionContext, request = request).collect { event
-        ->
-        when (event) {
-          is AgentEvent.LoopInitiated -> {}
-          is AgentEvent.StreamToken -> {
-            val lastMessage = getLastMessage(model = model)
-            val wasLoading = lastMessage?.type == ChatMessageType.LOADING
-            // Remove the last message if it is a "loading" message.
-            // This will only be done once.
-            if (wasLoading) {
-              removeLastMessage(model = model)
-            }
-
-            val thinkingText = event.thinking
-            val isThinking = !thinkingText.isNullOrEmpty()
-            var currentLastMessage = getLastMessage(model = model)
-
-            // If thinking is enabled, add a thinking message.
-            if (isThinking) {
-              if (currentLastMessage?.type != ChatMessageType.THINKING) {
-                addMessage(
-                  model = model,
-                  message =
-                    ChatMessageThinking(
-                      content = "",
-                      inProgress = true,
-                      side = ChatSide.AGENT,
-                      accelerator = accelerator,
-                      hideSenderLabel =
-                        currentLastMessage?.type == ChatMessageType.COLLAPSABLE_PROGRESS_PANEL,
-                    ),
-                )
+      try {
+        runtimeExecutor.executeStream(context = executionContext, request = request).collect {
+          event ->
+          when (event) {
+            is AgentEvent.LoopInitiated -> {}
+            is AgentEvent.StreamToken -> {
+              val lastMessage = getLastMessage(model = model)
+              val wasLoading = lastMessage?.type == ChatMessageType.LOADING
+              // Remove the last message if it is a "loading" message.
+              // This will only be done once.
+              if (wasLoading) {
+                removeLastMessage(model = model)
               }
-              updateLastThinkingMessageContentIncrementally(
-                model = model,
-                partialContent = thinkingText,
-              )
-            } else {
-              if (currentLastMessage?.type == ChatMessageType.THINKING) {
-                val thinkingMsg = currentLastMessage as ChatMessageThinking
+
+              val thinkingText = event.thinking
+              val isThinking = !thinkingText.isNullOrEmpty()
+              var currentLastMessage = getLastMessage(model = model)
+
+              // If thinking is enabled, add a thinking message.
+              if (isThinking) {
+                if (currentLastMessage?.type != ChatMessageType.THINKING) {
+                  addMessage(
+                    model = model,
+                    message =
+                      ChatMessageThinking(
+                        content = "",
+                        inProgress = true,
+                        side = ChatSide.AGENT,
+                        accelerator = accelerator,
+                        hideSenderLabel =
+                          currentLastMessage?.type == ChatMessageType.COLLAPSABLE_PROGRESS_PANEL,
+                      ),
+                  )
+                }
+                updateLastThinkingMessageContentIncrementally(
+                  model = model,
+                  partialContent = thinkingText,
+                )
+              } else {
+                if (currentLastMessage?.type == ChatMessageType.THINKING) {
+                  val thinkingMsg = currentLastMessage as ChatMessageThinking
+                  if (thinkingMsg.inProgress) {
+                    replaceLastMessage(
+                      model = model,
+                      message =
+                        ChatMessageThinking(
+                          content = thinkingMsg.content,
+                          inProgress = false,
+                          side = thinkingMsg.side,
+                          accelerator = thinkingMsg.accelerator,
+                          hideSenderLabel = thinkingMsg.hideSenderLabel,
+                        ),
+                      type = ChatMessageType.THINKING,
+                    )
+                  }
+                }
+                currentLastMessage = getLastMessage(model = model)
+                if (
+                  currentLastMessage?.type != ChatMessageType.TEXT ||
+                    currentLastMessage.side != ChatSide.AGENT
+                ) {
+                  // Add an empty message that will receive streaming results.
+                  addMessage(
+                    model = model,
+                    message =
+                      ChatMessageText(
+                        content = "",
+                        side = ChatSide.AGENT,
+                        accelerator = accelerator,
+                        hideSenderLabel =
+                          currentLastMessage?.type == ChatMessageType.COLLAPSABLE_PROGRESS_PANEL ||
+                            currentLastMessage?.type == ChatMessageType.THINKING,
+                      ),
+                  )
+                }
+
+                // Incrementally update the streamed partial results.
+                val latencyMs: Long = if (event.done) System.currentTimeMillis() - start else -1
+                if (event.token.isNotEmpty() || wasLoading || event.done) {
+                  updateLastTextMessageContentIncrementally(
+                    model = model,
+                    partialContent = event.token,
+                    latencyMs = latencyMs.toFloat(),
+                  )
+                }
+              }
+
+              if (firstRun) {
+                firstRun = false
+                setPreparing(false)
+                onFirstToken(model)
+              }
+            }
+            is AgentEvent.LoopTerminated -> {
+              val finalLastMessage = getLastMessage(model = model)
+              if (finalLastMessage?.type == ChatMessageType.THINKING) {
+                val thinkingMsg = finalLastMessage as ChatMessageThinking
                 if (thinkingMsg.inProgress) {
                   replaceLastMessage(
                     model = model,
@@ -353,107 +429,64 @@ open class LlmChatViewModelBase(
                   )
                 }
               }
-              currentLastMessage = getLastMessage(model = model)
-              if (
-                currentLastMessage?.type != ChatMessageType.TEXT ||
-                  currentLastMessage.side != ChatSide.AGENT
-              ) {
-                // Add an empty message that will receive streaming results.
-                addMessage(
-                  model = model,
-                  message =
-                    ChatMessageText(
-                      content = "",
-                      side = ChatSide.AGENT,
-                      accelerator = accelerator,
-                      hideSenderLabel =
-                        currentLastMessage?.type == ChatMessageType.COLLAPSABLE_PROGRESS_PANEL ||
-                          currentLastMessage?.type == ChatMessageType.THINKING,
-                    ),
-                )
-              }
-
-              // Incrementally update the streamed partial results.
-              val latencyMs: Long = if (event.done) System.currentTimeMillis() - start else -1
-              if (event.token.isNotEmpty() || wasLoading || event.done) {
-                updateLastTextMessageContentIncrementally(
-                  model = model,
-                  partialContent = event.token,
-                  latencyMs = latencyMs.toFloat(),
-                )
-              }
-            }
-
-            if (firstRun) {
-              firstRun = false
               setPreparing(false)
-              onFirstToken(model)
-            }
-          }
-          is AgentEvent.LoopTerminated -> {
-            val finalLastMessage = getLastMessage(model = model)
-            if (finalLastMessage?.type == ChatMessageType.THINKING) {
-              val thinkingMsg = finalLastMessage as ChatMessageThinking
-              if (thinkingMsg.inProgress) {
-                replaceLastMessage(
-                  model = model,
-                  message =
-                    ChatMessageThinking(
-                      content = thinkingMsg.content,
-                      inProgress = false,
-                      side = thinkingMsg.side,
-                      accelerator = thinkingMsg.accelerator,
-                      hideSenderLabel = thinkingMsg.hideSenderLabel,
-                    ),
-                  type = ChatMessageType.THINKING,
-                )
+              try {
+                persistCurrentSession(model = model, taskId = currentTaskId)
+                val isLimitReached = llmSessionManager.isTokenLimitReached(currentSessionId, model)
+                if (
+                  isLimitReached &&
+                    isAutoCompactEnabled(currentTaskId) &&
+                    Config.isContextCompactEnabled()
+                ) {
+                  executeCompactContext(
+                    model = model,
+                    taskId = currentTaskId,
+                    triggerType = ContextCompactionTriggerType.AUTO,
+                  )
+                } else if (isLimitReached) {
+                  setContextCompactionStatus(model, ContextCompactionStatus.TOKEN_LIMIT_REACHED)
+                }
+              } finally {
+                setInProgress(false)
               }
+              onDone()
             }
-            setPreparing(false)
-            try {
+            is AgentEvent.Error -> {
+              Log.e(TAG, "Error occurred while running inference: ${event.errorMessage}")
+              if (getContextCompactionStatus(model) == ContextCompactionStatus.COMPACTING) {
+                setContextCompactionStatus(model, ContextCompactionStatus.IDLE)
+              }
               persistCurrentSession(model = model, taskId = currentTaskId)
-              val isLimitReached = llmSessionManager.isTokenLimitReached(currentSessionId, model)
-              if (
-                isLimitReached &&
-                  isAutoCompactEnabled(currentTaskId) &&
-                  Config.isContextCompactEnabled()
-              ) {
-                executeCompactContext(
-                  model = model,
-                  taskId = currentTaskId,
-                  triggerType = ContextCompactionTriggerType.AUTO,
-                )
-              } else if (isLimitReached) {
-                setContextCompactionStatus(model, ContextCompactionStatus.TOKEN_LIMIT_REACHED)
-              }
-            } finally {
               setInProgress(false)
+              setPreparing(false)
+              onError(event.errorMessage)
             }
-            onDone()
-          }
-          is AgentEvent.Error -> {
-            Log.e(TAG, "Error occurred while running inference: ${event.errorMessage}")
-            if (getContextCompactionStatus(model) == ContextCompactionStatus.COMPACTING) {
-              setContextCompactionStatus(model, ContextCompactionStatus.IDLE)
+            is AgentEvent.LoopCancelled -> {
+              if (getContextCompactionStatus(model) == ContextCompactionStatus.COMPACTING) {
+                setContextCompactionStatus(model, ContextCompactionStatus.IDLE)
+              }
+              persistCurrentSession(model = model, taskId = currentTaskId)
+              setInProgress(false)
+              setPreparing(false)
             }
-            setInProgress(false)
-            setPreparing(false)
-            onError(event.errorMessage)
-          }
-          is AgentEvent.LoopCancelled -> {
-            if (getContextCompactionStatus(model) == ContextCompactionStatus.COMPACTING) {
-              setContextCompactionStatus(model, ContextCompactionStatus.IDLE)
-            }
-            setInProgress(false)
-            setPreparing(false)
           }
         }
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Exception) {
+        Log.e(TAG, "Unhandled exception during inference stream: ${e.message}", e)
+        persistCurrentSession(model = model, taskId = currentTaskId)
+        onError(e.message ?: "An unexpected error occurred during inference.")
+      } finally {
+        setPreparing(false)
+        setInProgress(false)
       }
     }
   }
 
   fun stopResponse(model: Model) {
     Log.d(TAG, "Stopping response for model ${model.name}...")
+    val wasInProgress = uiState.value.inProgress
     cancelCompaction()
     if (getContextCompactionStatus(model) == ContextCompactionStatus.COMPACTING) {
       setContextCompactionStatus(model, ContextCompactionStatus.IDLE)
@@ -461,8 +494,12 @@ open class LlmChatViewModelBase(
     if (getLastMessage(model = model) is ChatMessageLoading) {
       removeLastMessage(model = model)
     }
-    sessionStoppedByModel[model.name] = true
+    if (wasInProgress) {
+      sessionStoppedByModel[model.name] = true
+      persistSessionAsync(model = model, taskId = currentTaskId)
+    }
     setInProgress(false)
+    setPreparing(false)
     runtimeExecutor.interrupt()
     Log.d(TAG, "Done stopping response")
   }
@@ -592,7 +629,10 @@ open class LlmChatViewModelBase(
     sessionTransitionJob =
       viewModelScope.launch(Dispatchers.Default) {
         setIsResettingSession(true)
-        stopResponse(model = model)
+        if (uiState.value.inProgress) {
+          stopResponse(model = model)
+        }
+        sessionStoppedByModel[model.name] = false
 
         try {
           val messages = ChatMessageMapper.deserializeProtoMessages(session.messagesList)
@@ -600,6 +640,18 @@ open class LlmChatViewModelBase(
 
           currentSessionId = session.sessionId
           setRestoredMessages(model = model, messages = messages)
+
+          // Wait until the model has actually finished loading (never return early on Idle).
+          val status =
+            model.initStatusFlow.first {
+              it is Model.InitializationStatus.Initialized ||
+                it is Model.InitializationStatus.Failed
+            }
+          ensureActive()
+          if (status is Model.InitializationStatus.Failed || model.instance == null) {
+            setIsResettingSession(false)
+            return@launch
+          }
 
           val litertMessages = messages.mapNotNull { convertToLitertMessage(it) }
           executeResetSession(

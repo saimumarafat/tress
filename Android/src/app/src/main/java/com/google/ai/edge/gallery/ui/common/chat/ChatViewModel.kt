@@ -37,8 +37,10 @@ import com.google.ai.edge.gallery.firebaseAnalytics
 import com.google.ai.edge.gallery.proto.ChatSessionProto
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -144,17 +146,41 @@ abstract class ChatViewModel(
   open val dataStoreRepository: DataStoreRepository? = null,
   private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : ViewModel() {
+  private var _localSessionId: String? = null
+  private var _hasInitializedSession: Boolean = false
+
   /** The identifier for the current active chat session. */
   open var currentSessionId: String
-    get() =
-      llmSessionManager.activeSessionId
-        ?: error("Cannot get currentSessionId: No active session found in LlmSessionManager")
+    get() {
+      val local = _localSessionId
+      if (local != null) return local
+      val generated = com.google.ai.edge.gallery.agent.sessions.generateSessionId()
+      _localSessionId = generated
+      llmSessionManager.activeSessionId = generated
+      return generated
+    }
     set(value) {
+      _localSessionId = value
+      _hasInitializedSession = true
       llmSessionManager.activeSessionId = value
     }
 
   /** The current task ID for the session. */
   protected var currentTaskId: String = ""
+
+  /**
+   * Ensures [currentTaskId] is populated and, when opening a fresh chat without a session to
+   * restore, assigns a unique session ID scoped to this screen so previous sessions are never
+   * overwritten.
+   */
+  fun ensureTaskAndSession(taskId: String, hasInitialSessionToRestore: Boolean) {
+    if (taskId.isNotEmpty()) {
+      currentTaskId = taskId
+    }
+    if (!hasInitialSessionToRestore && !_hasInitializedSession) {
+      currentSessionId = com.google.ai.edge.gallery.agent.sessions.generateSessionId()
+    }
+  }
 
   private val _uiState = MutableStateFlow(createUiState())
   val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
@@ -637,10 +663,15 @@ abstract class ChatViewModel(
    */
   protected suspend fun persistCurrentSession(
     model: Model,
-    taskId: String,
+    taskId: String = currentTaskId,
     sessionId: String = currentSessionId,
   ) {
-    val currentMessages = _uiState.value.messagesByModel[model.name]?.toList().orEmpty()
+    val currentMessages =
+      _uiState.value.messagesByModel[model.name]
+        ?.filter { it !is ChatMessageLoading }
+        ?.toList()
+        .orEmpty()
+    val resolvedTaskId = taskId.ifBlank { currentTaskId }
     if (currentMessages.isNotEmpty()) {
       try {
         val protoMessages =
@@ -649,13 +680,22 @@ abstract class ChatViewModel(
           sessionId = sessionId,
           messages = protoMessages,
           originalModel = model.name,
-          taskId = taskId,
+          taskId = resolvedTaskId,
         )
       } catch (e: CancellationException) {
         throw e
       } catch (e: Exception) {
         Log.w(TAG, "Failed to persist session history for session $sessionId", e)
       }
+    }
+  }
+
+  /** Persists the current session asynchronously, surviving screen navigation or cancellation. */
+  fun persistSessionAsync(model: Model, taskId: String = currentTaskId) {
+    val sessionId = currentSessionId
+    val resolvedTaskId = taskId.ifBlank { currentTaskId }
+    CoroutineScope(NonCancellable + ioDispatcher).launch {
+      persistCurrentSession(model = model, taskId = resolvedTaskId, sessionId = sessionId)
     }
   }
 

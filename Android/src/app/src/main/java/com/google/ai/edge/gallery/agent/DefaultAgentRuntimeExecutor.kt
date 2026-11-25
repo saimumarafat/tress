@@ -30,10 +30,12 @@ import com.google.ai.edge.gallery.tools.ToolsProvider
 import com.google.ai.edge.litertlm.Contents
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ProducerScope
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.onFailure
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 
 private const val TAG = "AGDefaultAgentRuntimeExecutor"
@@ -180,8 +182,13 @@ open class DefaultAgentRuntimeExecutor(
   ): Flow<AgentEvent> = callbackFlow {
     emitEvent(AgentEvent.LoopInitiated(request = request))
 
-    val session =
-      activeSession.get() ?: error("Model not initialized in DefaultAgentRuntimeExecutor")
+    val session = activeSession.get()
+    if (session == null) {
+      Log.w(TAG, "executeStream called while activeSession is null")
+      emitEvent(AgentEvent.Error(errorMessage = "Model is still initializing. Please try again."))
+      close()
+      return@callbackFlow
+    }
     val curModel = session.sessionConfig.model
 
     toolDispatcher.setupExecutionContext(
@@ -202,7 +209,7 @@ open class DefaultAgentRuntimeExecutor(
     val sessionId =
       (request.metadata[AgentRequest.SESSION_ID] as? String)
         ?: llmSessionManager.activeSessionId
-        ?: error("No active session in LlmSessionManager")
+        ?: generateSessionId()
 
     val resultListener = { partialResult: String, done: Boolean, partialThinking: String? ->
       if (!partialResult.startsWith("<ctrl")) {
@@ -234,22 +241,30 @@ open class DefaultAgentRuntimeExecutor(
       Unit
     }
 
-    llmSessionManager.generateResponse(
-      sessionId = sessionId,
-      model = curModel,
-      input = request.query,
-      resultListener = resultListener,
-      cleanUpListener = cleanUpListener,
-      onError = onError,
-      images = images,
-      audioClips = audioClips,
-      extraContext = extraContext,
-    )
+    try {
+      llmSessionManager.generateResponse(
+        sessionId = sessionId,
+        model = curModel,
+        input = request.query,
+        resultListener = resultListener,
+        cleanUpListener = cleanUpListener,
+        onError = onError,
+        images = images,
+        audioClips = audioClips,
+        extraContext = extraContext,
+      )
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      Log.e(TAG, "Unhandled exception starting inference", e)
+      emitEvent(AgentEvent.Error(errorMessage = e.message ?: "Failed to run inference."))
+      close()
+    }
 
     awaitClose {
       // Clean up when flow collection is cancelled
     }
-  }
+  }.buffer(Channel.UNLIMITED)
 
   override suspend fun execute(
     context: AgentExecutionContext,

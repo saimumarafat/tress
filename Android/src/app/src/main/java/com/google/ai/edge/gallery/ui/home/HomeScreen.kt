@@ -156,7 +156,7 @@ fun HomeScreen(
   onBenchmarkClicked: (Model) -> Unit = {},
   homeHistoryViewModel: HomeHistoryViewModel = hiltViewModel(),
 ) {
-  val uiState by modelManagerViewModel.uiState.collectAsState()
+  val uiState by modelManagerViewModel.uiState.collectAsStateWithLifecycle()
   val recentSessions by homeHistoryViewModel.recentSessions.collectAsStateWithLifecycle()
   var showSettingsDialog by remember { mutableStateOf(false) }
   var showAppearanceSheet by remember { mutableStateOf(false) }
@@ -633,16 +633,19 @@ private fun HomeChatCapsuleDock(
       )
     }
 
-    GlassCircle(
-      onClick = onVoiceClick,
-      size = 48.dp,
-      tint = c.ink.copy(alpha = if (c.dark) 0.14f else 0.08f),
-      label = "Voice",
-      modifier = Modifier.border(
-        1.dp,
-        if (c.dark) Color(0xFF27272A) else Color(0xFFE4E4E7),
-        CircleShape,
-      ),
+    Box(
+      modifier = Modifier
+        .size(48.dp)
+        .clip(CircleShape)
+        .background(c.ink.copy(alpha = if (c.dark) 0.14f else 0.08f))
+        .border(
+          1.dp,
+          if (c.dark) Color(0xFF27272A) else Color(0xFFE4E4E7),
+          CircleShape,
+        )
+        .pressable(onClick = onVoiceClick, role = Role.Button)
+        .semantics { contentDescription = "Voice" },
+      contentAlignment = Alignment.Center,
     ) {
       GlassIcon(Icons.Rounded.Mic, "Voice", Modifier.size(20.dp))
     }

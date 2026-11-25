@@ -68,6 +68,7 @@ import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -268,7 +269,7 @@ fun ChatViewWrapper(
   initialSessionId: String? = null,
 ) {
   val context = LocalContext.current
-  val task = modelManagerViewModel.getTaskById(id = taskId)!!
+  val task = modelManagerViewModel.getTaskById(id = taskId) ?: return
   val scope = rememberCoroutineScope()
   var sessionRestoreJob by remember { mutableStateOf<Job?>(null) }
 
@@ -371,7 +372,9 @@ fun ChatViewWrapper(
       sessionRestoreJob?.cancel()
       val selectedModel = modelManagerViewModel.uiState.value.selectedModel
       if (onResetSessionClickedOverride != null) {
-        viewModel.stopResponse(model = selectedModel)
+        if (viewModel.uiState.value.inProgress) {
+          viewModel.stopResponse(model = selectedModel)
+        }
         viewModel.setIsResettingSession(true)
         sessionRestoreJob = scope.launch {
           try {
@@ -379,7 +382,15 @@ fun ChatViewWrapper(
             ensureActive()
             viewModel.currentSessionId = session.sessionId
             viewModel.setRestoredMessages(model = selectedModel, messages = messages)
-            onResetSessionClickedOverride(task, selectedModel, messages, /* clearHistory= */ false)
+            val status =
+              selectedModel.initStatusFlow.first {
+                it is Model.InitializationStatus.Initialized ||
+                  it is Model.InitializationStatus.Failed
+              }
+            ensureActive()
+            if (status is Model.InitializationStatus.Initialized) {
+              onResetSessionClickedOverride(task, selectedModel, messages, /* clearHistory= */ false)
+            }
           } catch (e: CancellationException) {
             throw e
           } catch (e: Exception) {

@@ -157,6 +157,7 @@ import com.google.ai.edge.gallery.core.design.components.GlassMenuItem
 import com.google.ai.edge.gallery.core.design.components.GlassSheet
 import com.google.ai.edge.gallery.core.design.components.RoundedRectangle
 import com.google.ai.edge.gallery.core.design.components.glass
+import com.google.ai.edge.gallery.core.design.components.pressable
 import com.google.ai.edge.gallery.core.design.components.wash
 import com.google.ai.edge.gallery.core.design.theme.Candy
 import com.google.ai.edge.gallery.core.design.theme.glassColors
@@ -683,10 +684,11 @@ fun MessageInputText(
               horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
               // LEFT: Large circular PLUS button (~54dp) inside continuous capsule dock.
-              GlassCircle(
+              ComposerCircleButton(
                 onClick = { showAddContentMenu = true },
-                size = 54.dp,
                 enabled = enableAddButton,
+                containerColor = if (c.dark) Color.White.copy(alpha = 0.12f) else Color.Black.copy(alpha = 0.06f),
+                borderColor = if (c.dark) Color.White.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.65f),
                 label = stringResource(R.string.cd_add_content_icon),
                 modifier = Modifier.onGloballyPositioned { plusAnchor = it.boundsInWindow() },
               ) {
@@ -793,10 +795,10 @@ fun MessageInputText(
                   // STOP generation
                   2 -> {
                     if (!modelInitializing && !modelPreparing) {
-                      GlassCircle(
+                      ComposerCircleButton(
                         onClick = onStopButtonClicked,
-                        size = 54.dp,
-                        tint = Candy.Tomato,
+                        containerColor = Candy.Tomato,
+                        borderColor = Color.White.copy(alpha = 0.25f),
                         label = stringResource(R.string.cd_stop_icon),
                       ) {
                         Icon(
@@ -820,11 +822,17 @@ fun MessageInputText(
                           pickedImages.isNotEmpty() ||
                           pickedAudioClips.isNotEmpty() ||
                           pickedTextFiles.isNotEmpty())
-                    GlassCircle(
+                    ComposerCircleButton(
                       onClick = submitCurrentMessage,
-                      size = 54.dp,
                       enabled = canSend,
-                      tint = if (canSend) (if (c.dark) Color(0xFFFAFAFA) else Color(0xFF18181B)) else Color.Unspecified,
+                      containerColor =
+                        if (canSend) (if (c.dark) Color(0xFFFAFAFA) else Color(0xFF18181B))
+                        else if (c.dark) Color.White.copy(alpha = 0.10f)
+                        else Color.Black.copy(alpha = 0.05f),
+                      borderColor =
+                        if (canSend) Color.Transparent
+                        else if (c.dark) Color.White.copy(alpha = 0.14f)
+                        else Color.Black.copy(alpha = 0.08f),
                       label = stringResource(R.string.cd_send_prompt_icon),
                     ) {
                       Icon(
@@ -842,17 +850,12 @@ fun MessageInputText(
                         !isResettingSession &&
                         !modelInitializing &&
                         !isContextLimitReached
-                    GlassCircle(
+                    ComposerCircleButton(
                       onClick = asrDictationActions.onStartDictation,
-                      size = 54.dp,
                       enabled = micEnabled,
-                      tint = c.ink.copy(alpha = if (c.dark) 0.14f else 0.08f),
+                      containerColor = c.ink.copy(alpha = if (c.dark) 0.14f else 0.08f),
+                      borderColor = if (c.dark) Color(0xFF27272A) else Color(0xFFE4E4E7),
                       label = stringResource(R.string.asr_dictation_start_desc),
-                      modifier = Modifier.border(
-                        1.dp,
-                        if (c.dark) Color(0xFF27272A) else Color(0xFFE4E4E7),
-                        CircleShape,
-                      ),
                     ) {
                       Icon(
                         Icons.Rounded.Mic,
@@ -1047,12 +1050,16 @@ fun MessageInputText(
                 )
               }
 
-              GlassMenu(
-                anchor = plusAnchor!!,
-                onDismiss = { showAddContentMenu = false },
-                items = menuItems,
-                menuWidth = 256.dp,
-              )
+              if (showAddContentMenu) {
+                plusAnchor?.let { anchor ->
+                  GlassMenu(
+                    anchor = anchor,
+                    onDismiss = { showAddContentMenu = false },
+                    items = menuItems,
+                    menuWidth = 256.dp,
+                  )
+                }
+              }
             }
           }
 
@@ -1270,6 +1277,31 @@ fun MessageInputText(
         }
       }
     }
+  }
+}
+
+@Composable
+private fun ComposerCircleButton(
+  onClick: () -> Unit,
+  containerColor: Color,
+  borderColor: Color,
+  label: String,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  content: @Composable () -> Unit,
+) {
+  Box(
+    modifier =
+      modifier
+        .size(54.dp)
+        .clip(CircleShape)
+        .background(containerColor)
+        .then(if (borderColor != Color.Transparent) Modifier.border(1.dp, borderColor, CircleShape) else Modifier)
+        .pressable(onClick = onClick, enabled = enabled)
+        .semantics { contentDescription = label },
+    contentAlignment = Alignment.Center,
+  ) {
+    content()
   }
 }
 

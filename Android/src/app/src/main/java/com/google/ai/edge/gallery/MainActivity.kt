@@ -19,6 +19,7 @@ package com.google.ai.edge.gallery
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.Looper
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -32,11 +33,13 @@ import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.google.ai.edge.gallery.common.PermissionsResultListener
 import com.google.ai.edge.gallery.common.VirtualDevicePermissionsHost
+import com.google.ai.edge.gallery.core.design.glass.GlassSettings
 import com.google.ai.edge.gallery.ui.common.MobileDataDownloadConfirmationHost
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.theme.GalleryTheme
 import com.google.ai.edge.litertlm.ExperimentalApi
 import com.google.ai.edge.litertlm.ExperimentalFlags
+import com.kyant.backdrop.GlassShaderWarmup
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.concurrent.CopyOnWriteArraySet
 
@@ -83,6 +86,10 @@ class MainActivity : ComponentActivity(), VirtualDevicePermissionsHost {
 
     @OptIn(ExperimentalApi::class)
     ExperimentalFlags.enableBenchmark = false
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !GlassSettings.isLiteTier) {
+      Looper.myQueue().addIdleHandler { GlassShaderWarmup.next() }
+    }
   }
 
   override fun onNewIntent(intent: Intent) {

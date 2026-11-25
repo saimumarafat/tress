@@ -22,10 +22,11 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -76,7 +77,7 @@ data class ChatTtsScrollState(
 @Composable
 fun rememberChatTtsScrollState(
   ttsController: TtsPlaybackController?,
-  listState: ScrollState,
+  listState: LazyListState,
   viewportHeightPx: Int,
 ): ChatTtsScrollState {
   var viewportTopInRootPx by remember { mutableFloatStateOf(0f) }
@@ -113,8 +114,7 @@ fun rememberChatTtsScrollState(
         val viewportCenterInRootY = viewportTopInRootPx + heightPx / 2f
         val deltaPx = (request.centerYInRoot - viewportCenterInRootY).roundToInt()
         if (abs(deltaPx) > 1) {
-          val targetScrollPx = (listState.value + deltaPx).coerceIn(0, listState.maxValue)
-          listState.animateScrollTo(targetScrollPx)
+          listState.animateScrollBy(deltaPx.toFloat())
         }
       }
     }

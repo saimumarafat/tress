@@ -160,6 +160,12 @@ fun ChatView(
 
   // Chat history drawer.
   val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+  LaunchedEffect(task.id, initialSessionId) {
+    viewModel.ensureTaskAndSession(
+      taskId = task.id,
+      hasInitialSessionToRestore = !initialSessionId.isNullOrBlank(),
+    )
+  }
   val allHistorySessions by viewModel.historySessions.collectAsState()
   val historySessions =
     remember(allHistorySessions, task.id) {
@@ -186,12 +192,15 @@ fun ChatView(
 
   val handleNavigateUp = {
     navigatingUp = true
+    viewModel.persistSessionAsync(model = selectedModel, taskId = task.id)
     navigateUp()
 
-    // clean up all models.
+    // clean up only initialized or initializing models.
     scope.launch(Dispatchers.Default) {
       for (model in task.models) {
-        modelManagerViewModel.cleanupModel(context = context, task = task, model = model)
+        if (model.instance != null || model.initializing) {
+          modelManagerViewModel.cleanupModel(context = context, task = task, model = model)
+        }
       }
     }
   }

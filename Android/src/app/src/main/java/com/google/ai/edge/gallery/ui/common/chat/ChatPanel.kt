@@ -35,7 +35,6 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
-import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -53,9 +52,11 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentWidth
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ThumbDown
 import androidx.compose.material.icons.filled.ThumbUp
@@ -78,7 +79,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -286,7 +286,7 @@ fun ChatPanel(
   val focusManager = LocalFocusManager.current
 
   // List state to control scrolling.
-  val listState = rememberScrollState()
+  val listState = rememberLazyListState()
   val density = LocalDensity.current
   var showBenchmarkConfigsDialog by remember { mutableStateOf(false) }
   val benchmarkMessage: MutableState<ChatMessage?> = remember { mutableStateOf(null) }
@@ -303,16 +303,16 @@ fun ChatPanel(
   var pickedAudioClipsCount by remember { mutableIntStateOf(0) }
 
   var showImageLimitBanner by remember { mutableStateOf(false) }
-  var showTestChatLimitedBanner by
-    remember(task.id) {
-      mutableStateOf(
-        task.id == BuiltInTaskId.LLM_TEST &&
-          !modelManagerViewModel.dataStoreRepository.hasViewedPromo(TEST_CHAT_LIMITED_NOTE_PROMO_ID)
-      )
+  var showTestChatLimitedBanner by remember(task.id) { mutableStateOf(false) }
+  LaunchedEffect(task.id) {
+    if (task.id == BuiltInTaskId.LLM_TEST) {
+      val viewed =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+          modelManagerViewModel.dataStoreRepository.hasViewedPromo(TEST_CHAT_LIMITED_NOTE_PROMO_ID)
+        }
+      showTestChatLimitedBanner = !viewed
     }
-
-  // Stores the heights of the items in the list, indexed by the item index.
-  val itemHeights = remember { mutableStateMapOf<Int, Int>() }
+  }
 
   // Turn messages into a derived state to trigger updates when the list is updated.
   val currentMessages by rememberUpdatedState(messages)
@@ -376,8 +376,21 @@ fun ChatPanel(
       val unused = awaitFrame()
       scrollToBottom(
         listState = listState,
+        itemCount = currentMessages.size,
         animate = true,
-        animationDurationMs = SCROLL_ANIMATION_DURATION_MS,
+      )
+    }
+  }
+
+  val streamingContentLength =
+    if (uiState.inProgress) (currentMessages.lastOrNull() as? ChatMessageText)?.content?.length ?: 0
+    else 0
+  LaunchedEffect(streamingContentLength) {
+    if (uiState.inProgress && isAtBottom && currentMessages.isNotEmpty() && streamingContentLength > 0) {
+      scrollToBottom(
+        listState = listState,
+        itemCount = currentMessages.size,
+        animate = false,
       )
     }
   }
@@ -479,17 +492,21 @@ fun ChatPanel(
                 .then(ttsViewportPositionModifier),
           ) {
         val cdChatPanel = stringResource(R.string.cd_chat_panel)
-        Column(
+        LazyColumn(
+          state = listState,
           modifier =
             Modifier.fillMaxSize()
               .throttleBackdrops { listState.isScrollInProgress }
               .nestedScroll(nestedScrollConnection)
               .nestedScroll(ttsUserScrollConnection)
-              .verticalScroll(state = listState)
               .semantics { contentDescription = cdChatPanel },
           verticalArrangement = Arrangement.Top,
         ) {
-          ChatMessages(messages) { index, message ->
+          itemsIndexed(
+            items = messages,
+            key = { _, message -> message.id },
+            contentType = { _, message -> message.type },
+          ) { index, message ->
             val imageHistoryCurIndex = remember { mutableIntStateOf(0) }
             var hAlign: Alignment.Horizontal = Alignment.End
             var backgroundColor: Color = MaterialTheme.customColors.userBubbleBgColor
@@ -531,15 +548,6 @@ fun ChatPanel(
             Column(
               modifier =
                 Modifier.fillMaxWidth()
-                  // Update the height of the item in the list when the size changes.
-                  //
-                  // Need to put this modifier here to get the correct size that includes the
-                  // paddings.
-                  .onSizeChanged { size ->
-                    if (itemHeights[index] != size.height) {
-                      itemHeights[index] = size.height
-                    }
-                  }
                   .padding(
                     start = 16.dp + extraPaddingStart,
                     end = 12.dp + extraPaddingEnd,
@@ -663,7 +671,7 @@ fun ChatPanel(
                       is ChatMessageText ->
                         MessageBodyText(
                           message = message,
-                          inProgress = uiState.inProgress,
+                          inProgress = uiState.inProgress && index == messages.lastIndex,
                           horizontalPadding =
                             if (isAgentResponseText) {
                               0.dp
@@ -794,7 +802,9 @@ fun ChatPanel(
           }
 
           // Clearance above the floating input dock so the last message stays unobstructed.
-          Spacer(modifier = Modifier.height(92.dp).fillMaxWidth())
+          item(key = "bottom_clearance") {
+            Spacer(modifier = Modifier.height(92.dp).fillMaxWidth())
+          }
         }
 
         SnackbarHost(hostState = snackbarHostState, modifier = Modifier.padding(bottom = 86.dp, top = 4.dp))
@@ -877,7 +887,7 @@ fun ChatPanel(
         ) {
           ScrollToBottomButton(
             isAtBottom = isAtBottom,
-            onClick = { scope.launch { scrollToBottom(listState, animate = true) } },
+            onClick = { scope.launch { scrollToBottom(listState, currentMessages.size, animate = true) } },
           )
         }
       }
@@ -1080,20 +1090,6 @@ fun ChatPanel(
   }
 }
 
-/**
- * Calls [content] for each of [messages] with its index, like `forEachIndexed`.
- *
- * The message UI is in its own composable lambda so that it compiles to its own method: inlined
- * into [ChatPanel], it makes that method too large for JaCoCo to instrument for coverage.
- */
-@Composable
-private fun ChatMessages(
-  messages: List<ChatMessage>,
-  content: @Composable (index: Int, message: ChatMessage) -> Unit,
-) {
-  messages.forEachIndexed { index, message -> content(index, message) }
-}
-
 @Composable
 private fun DictationBottomFade(visible: Boolean, modifier: Modifier = Modifier) {
   AnimatedVisibility(visible = visible, enter = fadeIn(), exit = fadeOut(), modifier = modifier) {
@@ -1107,16 +1103,14 @@ private fun DictationBottomFade(visible: Boolean, modifier: Modifier = Modifier)
 }
 
 private suspend fun scrollToBottom(
-  listState: ScrollState,
+  listState: LazyListState,
+  itemCount: Int,
   animate: Boolean = false,
-  animationDurationMs: Int = SCROLL_ANIMATION_DURATION_MS,
 ) {
+  if (itemCount <= 0) return
   if (animate) {
-    listState.animateScrollTo(
-      listState.maxValue,
-      animationSpec = tween(durationMillis = animationDurationMs, easing = FastOutSlowInEasing),
-    )
+    listState.animateScrollToItem(itemCount)
   } else {
-    listState.scrollTo(listState.maxValue)
+    listState.scrollToItem(itemCount)
   }
 }

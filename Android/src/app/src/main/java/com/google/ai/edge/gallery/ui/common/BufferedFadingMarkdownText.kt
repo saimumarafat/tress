@@ -38,25 +38,26 @@ import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.conflate
 
-private const val FADE_INTERVAL_MS = 120
+private const val FADE_INTERVAL_MS = 85
 
 /**
- * A Composable that displays Markdown text with a smooth fading transition when the text content
- * changes.
- *
- * This is achieved by using two layers of [MarkdownText]. When the input `text` changes:
- * 1. The new text is rendered on a hidden overlay layer (`text2`).
- * 2. The overlay layer is smoothly faded in.
- * 3. Once the fade-in is complete, the base layer (`text1`) is updated to the new text.
- * 4. The overlay layer is instantly hidden, ready for the next text update.
+ * A Composable that displays Markdown text with a smooth fading transition while actively
+ * streaming ([inProgress] is true), and renders a single lightweight [MarkdownText] once
+ * complete so idle messages and scrolling use zero offscreen compositing layers.
  */
 @Composable
 fun BufferedFadingMarkdownText(text: String, inProgress: Boolean, modifier: Modifier = Modifier) {
+  if (!inProgress) {
+    SelectionContainer(modifier = modifier) {
+      MarkdownText(text = text)
+    }
+    return
+  }
+
   var text1 by remember { mutableStateOf(text) }
   var text2 by remember { mutableStateOf("") }
   val alpha2 = remember { Animatable(0f) }
   val currentText by rememberUpdatedState(text)
-  var showOverlay by remember { mutableStateOf(true) }
 
   LaunchedEffect(Unit) {
     snapshotFlow { currentText }
@@ -78,7 +79,7 @@ fun BufferedFadingMarkdownText(text: String, inProgress: Boolean, modifier: Modi
         // Swap the background text to match the new text instantly.
         text1 = newText
 
-        // Wait a frame for the overlay layer to fully lay out and draw.
+        // Wait a frame for the base layer to lay out and draw.
         val unused = awaitFrame()
 
         // Instantly hide the overlay so we don't double-render the text.
@@ -86,41 +87,18 @@ fun BufferedFadingMarkdownText(text: String, inProgress: Boolean, modifier: Modi
       }
   }
 
-  val previousInProgress = rememberUpdatedState(inProgress)
-  LaunchedEffect(inProgress) {
-    // Trigger only when inProgress changes from true to false.
-    if (previousInProgress.value && !inProgress) {
-      delay(FADE_INTERVAL_MS.toLong() * 2)
-      showOverlay = false
-    }
-  }
-
   Box(modifier = modifier.graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }) {
-    // LAYER 1: Base text.
-    //
-    // The alpha of the base text is 1f - alpha2.value. As alpha2 animates from 0f to 1f,
-    // the base text fades out from full opacity (1f) to transparent (0f).
-    // This works in conjunction with BlendMode.Plus on the overlay layer:
-    // As the overlay fades in, the base text fades out. Since the sum of their alphas is always 1,
-    // and BlendMode.Plus adds the colors, the transition appears as a smooth crossfade
-    // without any intermediate darkening or color artifacts.
-    SelectionContainer() {
+    SelectionContainer {
       MarkdownText(text = text1, modifier = Modifier.graphicsLayer { alpha = 1f - alpha2.value })
     }
 
-    // LAYER 2: Overlay text.
-    if (showOverlay) {
+    if (alpha2.value > 0.001f) {
       MarkdownText(
         text = text2,
         modifier =
-          // Ignore this layer in terms of accessibility semantics (won't be read by screen
-          // readers).
           Modifier.clearAndSetSemantics {}
             .graphicsLayer {
               alpha = alpha2.value
-              // Use BlendMode.Plus to ensure that when alpha2 is between 0 and 1,
-              // the overlay text is added on top of the base text without
-              // darkening or other complex blending effects.
               this.blendMode = BlendMode.Plus
             },
       )

@@ -115,7 +115,7 @@ private class FloatingLayerNode(
 
     override fun ContentDrawScope.draw() {
         val layer = layer
-        if (layer == null) {
+        if (layer == null || this.size.width <= 0f || this.size.height <= 0f) {
             drawContent()
             return
         }
@@ -127,8 +127,14 @@ private class FloatingLayerNode(
         // room around the content, so glass that swells or blooms past its bounds isn't cut off
         val m = margin
         val s = this.size.toIntSize()
+        val w = s.width + 2 * m
+        val h = s.height + 2 * m
+        if (w <= 0 || h <= 0) {
+            drawContent()
+            return
+        }
         layer.topLeft = IntOffset(-m, -m)
-        layer.record(IntSize(s.width + 2 * m, s.height + 2 * m)) {
+        layer.record(IntSize(w, h)) {
             translate(m.toFloat(), m.toFloat()) { this@draw.drawContent() }
         }
         drawLayer(layer)

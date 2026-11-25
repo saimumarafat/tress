@@ -369,7 +369,11 @@ internal fun LiquidMorphSurface(
     val ink = adaptiveInk(luminance, c.ink)
     val style = GlassSettings.effectiveStyle
     val dark = c.dark
-    val surface = remember { RuntimeShader(LiquidSurfaceShader) }
+    val surface = remember {
+      cachedLiquidSurfaceShader ?: RuntimeShader(LiquidSurfaceShader).also {
+        cachedLiquidSurfaceShader = it
+      }
+    }
     val rimAlpha = (if (dark) 0.32f else 0.6f) * style.highlight.coerceIn(0f, 1f)
     fun washIn() = ((p.value - 0.08f) / 0.4f).coerceIn(0f, 1f)
     val frame = remember { intArrayOf(0) }
@@ -515,6 +519,7 @@ private class RectClip(private val r: Rect, private val radius: Float) : Shape {
 private const val JellyStretch = 0.08f
 private const val JellySqueeze = 0.04f
 private const val JellyMax = 0.14f
+private var cachedLiquidSurfaceShader: RuntimeShader? = null
 
 private fun signedLum(luminance: Float): Float =
   (luminance * 2f - 1f).let { sign(it) * it * it }

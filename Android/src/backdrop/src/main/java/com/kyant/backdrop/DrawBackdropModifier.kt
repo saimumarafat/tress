@@ -296,22 +296,22 @@ private class DrawBackdropNode(
 
     private val drawBackdropLayer: DrawScope.() -> Unit = {
         val layer = graphicsLayer
-        if (layer != null) {
+        if (layer != null && size.width > 0f && size.height > 0f) {
             val padding = padding
+            val w = size.width.toInt() + padding.toInt() * 2
+            val h = size.height.toInt() + padding.toInt() * 2
+            if (w > 0 && h > 0) {
+                recordLayer(
+                    layer,
+                    size = IntSize(w, h),
+                    block = recordBackdropBlock
+                )
 
-            recordLayer(
-                layer,
-                size = IntSize(
-                    size.width.toInt() + padding.toInt() * 2,
-                    size.height.toInt() + padding.toInt() * 2
-                ),
-                block = recordBackdropBlock
-            )
-
-            layer.topLeft =
-                if (padding != 0f) IntOffset(-padding.toInt(), -padding.toInt())
-                else IntOffset.Zero
-            drawLayer(layer)
+                layer.topLeft =
+                    if (padding != 0f) IntOffset(-padding.toInt(), -padding.toInt())
+                    else IntOffset.Zero
+                drawLayer(layer)
+            }
         }
     }
 
@@ -326,6 +326,10 @@ private class DrawBackdropNode(
     }
 
     override fun ContentDrawScope.draw() {
+        if (size.width <= 0f || size.height <= 0f) {
+            drawContent()
+            return
+        }
         if (effectScope.update(this)) {
             updateEffects()
         }
@@ -436,6 +440,7 @@ private class DrawBackdropNode(
         }
 
         effectScope.reset()
+        settleJob?.cancel()
         settleJob = null
         pendingCoordinates = null
         throttle = null

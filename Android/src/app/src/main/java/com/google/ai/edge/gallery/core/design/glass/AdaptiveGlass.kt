@@ -20,7 +20,6 @@
 
 package com.google.ai.edge.gallery.core.design.glass
 
-import android.graphics.Bitmap
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -32,14 +31,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.scale
-import androidx.compose.ui.graphics.layer.GraphicsLayer
-import androidx.compose.ui.graphics.rememberGraphicsLayer
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.util.lerp
 import com.google.ai.edge.gallery.core.design.theme.glassColors
 import com.kyant.backdrop.BackdropEffectScope
@@ -48,15 +42,10 @@ import com.kyant.backdrop.effects.colorControls
 import com.kyant.backdrop.effects.lens
 import kotlin.math.abs
 import kotlin.math.sign
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 
 @Stable
-class GlassLuminance internal constructor(initial: Float, internal val layer: GraphicsLayer) {
+class GlassLuminance internal constructor(initial: Float) {
   private val anim = Animatable(initial)
-  @Volatile private var recorded = false
-  @Volatile private var dirty = true
 
   val value: Float get() = anim.value
   var onLight by mutableStateOf(initial > 0.5f)
@@ -64,78 +53,39 @@ class GlassLuminance internal constructor(initial: Float, internal val layer: Gr
   var measured by mutableStateOf(true)
     private set
 
+  // Keep draw-time backdrop pipeline free of per-frame offscreen graphicsLayer readbacks.
   internal val recorder: DrawScope.(DrawScope.() -> Unit) -> Unit = { drawBackdrop ->
     drawBackdrop()
-    if (!recorded || dirty) {
-      val w = (size.width / DOWN).toInt().coerceAtLeast(1)
-      val h = (size.height / DOWN).toInt().coerceAtLeast(1)
-      layer.record(IntSize(w, h)) {
-        scale(1f / DOWN, 1f / DOWN, pivot = Offset.Zero) { drawBackdrop() }
-      }
-      recorded = true
-      dirty = false
-    }
   }
 
-  internal suspend fun run() {
-    val px = IntArray(SAMPLES * SAMPLES)
-    while (true) {
-      if (!recorded) {
-        delay(32)
-        continue
-      }
-      val lum = withContext(Dispatchers.Default) {
-        runCatching {
-          val full = layer.toImageBitmap().asAndroidBitmap()
-          val sw = full.width.coerceAtLeast(1)
-          val sh = full.height.coerceAtLeast(1)
-          var sum = 0.0
-          var n = 0
-          for (sy in 0 until SAMPLES) {
-            val py = ((sy + 0.5f) / SAMPLES * sh).toInt().coerceIn(0, sh - 1)
-            for (sx in 0 until SAMPLES) {
-              val pxCoord = ((sx + 0.5f) / SAMPLES * sw).toInt().coerceIn(0, sw - 1)
-              val c = full.getPixel(pxCoord, py)
-              if ((c ushr 24) < 8) continue
-              sum += (0.2126 * ((c shr 16) and 0xFF) + 0.7152 * ((c shr 8) and 0xFF) + 0.0722 * (c and 0xFF)) / 255.0
-              n++
-            }
-          }
-          if (n == 0) null else (sum / n).toFloat()
-        }.getOrNull()
-      }
-      if (lum != null) {
-        onLight = when {
-          lum > 0.56f -> true
-          lum < 0.44f -> false
-          else -> onLight
-        }
-        if (abs(lum - anim.targetValue) > 0.08f) {
-          anim.animateTo(lum, tween(380))
-        }
-      }
-      delay(SAMPLE_INTERVAL_MS)
-      dirty = true
+  internal suspend fun updateFrom(lum: Float) {
+    onLight = when {
+      lum > 0.56f -> true
+      lum < 0.44f -> false
+      else -> onLight
     }
-  }
-
-  private companion object {
-    const val DOWN = 8f
-    const val SAMPLES = 5
-    const val SAMPLE_INTERVAL_MS = 600L
+    if (abs(lum - anim.targetValue) > 0.08f) {
+      anim.animateTo(lum, tween(380))
+    }
   }
 }
 
 @Composable
 fun rememberGlassLuminance(enabled: Boolean = GlassSettings.adaptive): GlassLuminance? {
   if (!enabled || glassColors.clean || GlassSettings.isLiteTier) return null
-  val layer = rememberGraphicsLayer()
   val dark = glassColors.dark
   val screen = LocalScreenInk.current
-  val state = remember(layer) {
-    GlassLuminance(screen?.frame?.average() ?: if (dark) 0.14f else 0.86f, layer)
+  val initial = screen?.frame?.average() ?: if (dark) 0.14f else 0.86f
+  val state = remember { GlassLuminance(initial) }
+  if (screen != null) {
+    LaunchedEffect(state, screen) {
+      snapshotFlow { screen.frame?.average() }.collect { avg ->
+        if (avg != null) {
+          state.updateFrom(avg)
+        }
+      }
+    }
   }
-  LaunchedEffect(state) { state.run() }
   return state
 }
 

@@ -31,23 +31,16 @@ It reimagines local AI on Android with:
 ## Screenshots
 
 <p align="center">
-  <img src="assets/screenshots/home-bento.jpg" width="210" alt="Home Bento Workspace" />
-  <img src="assets/screenshots/prompt-lab-grid.jpg" width="210" alt="Model Hub Grid" />
-  <img src="assets/screenshots/chat-composer.jpg" width="210" alt="Chat Attachment Composer" />
-  <img src="assets/screenshots/chat-dark.jpg" width="210" alt="Dark Mode Chat" />
+  <img src="assets/screenshots/home-bento-dark.jpg" width="210" alt="Home Bento Workspace" />
+  <img src="assets/screenshots/models-hub-light.jpg" width="210" alt="Models Hub" />
+  <img src="assets/screenshots/chat-empty-light.jpg" width="210" alt="Chat Workspace" />
 </p>
-
-<details>
-<summary>More screens</summary>
 
 <p align="center">
-  <img src="assets/screenshots/ai-chat-models.jpg" width="210" alt="AI Chat Models" />
-  <img src="assets/screenshots/agent-skills.jpg" width="210" alt="Agent Skills" />
-  <img src="assets/screenshots/mobile-actions.jpg" width="210" alt="Mobile Actions" />
-  <img src="assets/screenshots/menu-drawer.jpg" width="210" alt="Navigation Menu" />
+  <img src="assets/screenshots/chat-attachments-light.jpg" width="210" alt="Multimodal Attachment Menu" />
+  <img src="assets/screenshots/chat-streaming-dark.jpg" width="210" alt="On-Device Streaming Response" />
+  <img src="assets/screenshots/chat-multimodal-dark.jpg" width="210" alt="Multimodal Image Understanding" />
 </p>
-
-</details>
 
 ---
 

@@ -416,6 +416,7 @@ object LlmChatModelHelper : LlmModelHelper {
   @OptIn(ExperimentalApi::class) // opt-in experimental flags
   override fun cleanUp(model: Model, onDone: () -> Unit) {
     if (model.instance == null) {
+      onDone()
       return
     }
 
@@ -665,7 +666,8 @@ object LlmChatModelHelper : LlmModelHelper {
             errorMessage = e.message ?: "Unknown error",
           )
       }
-      throw e
+      Log.e(TAG, "Failed to run inference", e)
+      onError(cleanUpMediapipeTaskErrorMessage(e.message ?: "Unknown error"))
     }
   }
 }
