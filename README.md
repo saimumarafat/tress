@@ -51,15 +51,6 @@ It reimagines local AI on Android with:
 
 ---
 
-## Brand Assets
-
-High-resolution logo files exported in [`assets/`](assets/):
-- [`assets/tress-logo.png`](assets/tress-logo.png) — 1024×1024 transparent mark
-- [`assets/tress-app-icon.png`](assets/tress-app-icon.png) — 1024×1024 rounded app icon
-- [`assets/tress-logo.svg`](assets/tress-logo.svg) — Scalable vector mark
-
----
-
 ## Core Capabilities
 
 - **AI Chat & Multimodal Ask**: Chat with `Gemma 4`, `Gemma 3n`, `Qwen 2.5`, and `DeepSeek-R1` distilled models locally with image & audio inputs.
